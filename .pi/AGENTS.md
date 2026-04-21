@@ -2,7 +2,12 @@
 
 ## ⚠️ CRITICAL RULES - DO NOT VIOLATE
 
-This project uses a **strict planning-only workflow** with three agents: RESEARCHER → PLANNER → ORGANIZER.
+This project uses two complementary workflows:
+
+1. **Planning Workflow**: RESEARCHER → PLANNER → ORGANIZER (planning only, no code)
+2. **Coding Workflow**: CODER → IMPLEMENTATION PLANNER → CODER → PR-WRITER (implementation)
+
+Both workflows are enforced by extensions and cannot be bypassed.
 
 ### Core Constraints (ABSOLUTE)
 
@@ -86,6 +91,82 @@ All GitHub issues MUST include semantic version numbers in titles (https://semve
         └── [2.1.1] Task - Build profile UI components
 ```
 
+## Coding Workflow
+
+A separate **coding workflow** implements approved GitHub issues through code:
+
+```
+┌─────────────┐     ┌─────────────────────┐     ┌─────────────┐     ┌─────────────┐
+│   USER      │────▶│       CODER         │────▶│   IMPLEM.   │────▶│    CODER    │
+│ ISSUE URL   │     │    (Primary)        │     │  PLANNER    │     │  (Primary)  │
+└─────────────┘     └─────────────────────┘     └─────────────┘     └──────┬──────┘
+     │                                                                     │
+     │     ┌───────────────────────────────────────────────────────────────┘
+     │     │
+     │     ▼
+     │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+     │  │   LINTER    │────▶│  PR-WRITER  │────▶│   MERGE     │
+     │  │  (validate) │     │  (Subagent) │     │  to feat    │
+     │  └─────────────┘     └─────────────┘     └─────────────┘
+     │
+     └──────────────────────────────────────────────────────────────────────►
+                              (next task, if any)
+```
+
+### CODER Agent (Primary Entry Point)
+- **Purpose**: Implement GitHub issues by orchestrating subagents and writing code
+- **Trigger**: User provides a GitHub issue URL via `/code <url>`
+- **Constraint**: NEVER operates on main/master - always uses feature branches
+- **Iteration**: Processes tasks in semantic versioning order
+
+### IMPLEMENTATION PLANNER Agent (Subagent)
+- **Purpose**: Analyze task issue and codebase, produce detailed IMPLEMENTATION.md
+- **Constraint**: NEVER writes implementation code - analysis only
+- **Output**: `.tmp/IMPLEMENTATION.md` with specific file/line references
+
+### PR-WRITER Agent (Subagent)
+- **Purpose**: Commit code, push branch, create PR, merge to feature branch
+- **Constraint**: PRs always target the feature branch, never main/master
+- **Output**: Merged PR with "Fixes" links to close related issues
+
+### Coding Workflow States
+
+1. **IDLE** → User calls `/code <issue-url>`
+2. **FETCHING_ISSUE** → Parse issue type (feature/story/task)
+3. **PLANNING_IMPLEMENTATION** → IMPLEMENTATION PLANNER analyzes codebase
+4. **CODING** → CODER writes/edits code based on IMPLEMENTATION.md
+5. **LINTING** → Run first-party linter, fix errors
+6. **CREATING_PR** → PR-WRITER commits, pushes, creates PR, merges
+7. **COMPLETE_TASK** → Task done, clean .tmp, proceed to next task
+8. **COMPLETE_ALL** → All tasks finished
+
+### Issue Type Handling
+
+| Issue Type | Action | Iteration |
+|------------|--------|-----------|
+| **Task** | Process directly | Single task |
+| **Story** | Find child tasks | Iterate each task in semver order |
+| **Feature** | Find child stories → find their tasks | Iterate each task globally in semver order |
+
+### Branch Strategy
+
+- **Feature branch**: `feat/<issue_number>-<slug>` (created from main/master)
+- **Task branch**: `feat/<feature_number>-<slug>-task-<version>` (created from feature branch)
+- **PR target**: Feature branch (never main/master)
+- **User review**: Manual merge of feature branch to main/master when ready
+
+### Semantic Versioning for Task Order
+
+Tasks are processed in ascending semantic version order:
+- `[1.1.1]` → `[1.1.2]` → `[1.1.3]` → `[1.2.1]` → `[2.1.1]`
+
+### PR Template Rules
+
+All PRs MUST include:
+- `Fixes https://github.com/<owner>/<repo>/issues/<task_number>`
+- If **last task of story**, ALSO include:
+  `Fixes https://github.com/<owner>/<repo>/issues/<story_number>`
+
 ## Usage
 
 ### Start a New Plan
@@ -120,6 +201,26 @@ After reviewing `.tmp/PLAN.md`:
 /reset-plan
 ```
 
+---
+
+### Start Coding an Issue
+
+```
+/code https://github.com/owner/repo/issues/42
+```
+
+### Check Coding Status
+
+```
+/code-status
+```
+
+### Emergency Reset Coding Workflow
+
+```
+/reset-code
+```
+
 ## Documentation Sources (ALLOWED)
 
 ✅ **Use These:**
@@ -139,6 +240,7 @@ After reviewing `.tmp/PLAN.md`:
 
 ## Pre-Granted Permissions
 
+### Planning Workflow
 The following execute WITHOUT confirmation:
 - `gh issue create`
 - `gh issue list`
@@ -146,6 +248,29 @@ The following execute WITHOUT confirmation:
 - `gh api`
 - `gh repo view`
 - `git remote get-url origin`
+
+### Coding Workflow
+The following execute WITHOUT confirmation:
+- `gh issue view`
+- `gh issue list`
+- `gh pr create`
+- `gh pr merge`
+- `gh pr view`
+- `gh api`
+- `gh repo view`
+- `git checkout -b`
+- `git checkout`
+- `git branch`
+- `git add`
+- `git commit`
+- `git push`
+- `git status`
+- `git log`
+- `git diff`
+- `git remote`
+- `git merge`
+- `git rebase`
+- First-party linter commands (`npm run lint`, `cargo clippy`, `ruff check`, etc.)
 
 All other commands require explicit user approval.
 
@@ -164,6 +289,17 @@ All other commands require explicit user approval.
 - Allowed: `read`, `bash` (gh-cli commands only)
 - Pre-granted: All `gh issue *` commands
 
+### CODING Phase
+- Allowed: `read`, `grep`, `find`, `ls`, `bash`, `subagent`, `write`, `edit`
+- **FORBIDDEN**: Operating on `main`/`master` branch
+- Must run linter before invoking PR-WRITER
+- Must not introduce new dependencies (unless stated in issue)
+
+### PR-CREATION Phase
+- Allowed: `read`, `bash` (git and gh-cli commands only)
+- Pre-granted: `git add`, `git commit`, `git push`, `gh pr create`, `gh pr merge`
+- PRs must target feature branch, never main/master
+
 ## Template Files
 
 All agent outputs follow structured templates:
@@ -180,17 +316,23 @@ All agent outputs follow structured templates:
 .pi/
 ├── AGENTS.md                    # This file - global workflow instructions
 ├── extensions/
-│   └── planning-orchestrator.ts # Workflow enforcement + permission gates
-├── agents/                       # Agent definitions (used by subagent tool)
-│   ├── researcher.md            # Research agent
+│   ├── planning-orchestrator.ts # Planning workflow enforcement
+│   └── coding-orchestrator.ts   # Coding workflow enforcement
+├── agents/                       # Agent definitions
+│   ├── researcher.md            # Research agent (planning)
 │   ├── planner.md               # Planning agent (primary)
-│   └── organizer.md             # Organization agent
+│   ├── organizer.md             # Organization agent
+│   ├── coder.md                 # Coding agent (primary)
+│   ├── implementation-planner.md # Implementation planning agent
+│   └── pr-writer.md             # PR creation agent
 ├── skills/
 │   └── gh-cli/
 │       └── SKILL.md             # GitHub CLI operations
 ├── prompts/
 │   ├── pre-plan.md              # Pre-plan template
 │   ├── plan.md                  # Plan template
+│   ├── implementation.md        # Implementation plan template
+│   ├── pr.md                    # PR template
 │   └── issue-templates/
 │       ├── feature.md           # Feature issue template
 │       ├── story.md             # Story issue template
@@ -221,6 +363,7 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 
 ## Success Metrics
 
+### Planning Workflow
 - ✅ Planner NEVER writes code
 - ✅ Researcher uses only official docs
 - ✅ User approval gate stops workflow at PLAN.md
@@ -228,6 +371,18 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 - ✅ Issues follow Semantic Versioning with version numbers in titles (e.g., `[1] Feat`, `[1.5] Story`, `[1.5.3] Task`)
 - ✅ No assumptions without user clarification
 - ✅ Workflow cannot be skipped
+
+### Coding Workflow
+- ✅ CODER NEVER operates on main/master
+- ✅ IMPLEMENTATION PLANNER NEVER writes code
+- ✅ Linter passes before every PR
+- ✅ No new dependencies introduced (unless stated in issue)
+- ✅ PRs always target feature branch, never main/master
+- ✅ PRs include "Fixes" link to task issue
+- ✅ Last task of story also includes "Fixes" link to story issue
+- ✅ Tasks processed in semantic versioning order
+- ✅ .tmp cleaned between tasks
+- ✅ Feature branch reviewed by user before merging to main
 
 ## References
 
@@ -239,4 +394,4 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 
 ---
 
-**Enforcement**: This workflow is enforced by the `planning-orchestrator.ts` extension. Agents cannot bypass phases or skip user approval gates.
+**Enforcement**: The planning workflow is enforced by `planning-orchestrator.ts`. The coding workflow is enforced by `coding-orchestrator.ts`. Agents cannot bypass phases or skip user approval gates.

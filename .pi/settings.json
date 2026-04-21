@@ -1,5 +1,8 @@
 {
-  "extensions": ["./.pi/extensions/planning-orchestrator.ts"],
+  "extensions": [
+    "./.pi/extensions/planning-orchestrator.ts",
+    "./.pi/extensions/coding-orchestrator.ts"
+  ],
   "skills": ["./.pi/skills/gh-cli"],
   "agentScope": "both",
   "enableSkillCommands": true
