@@ -74,6 +74,48 @@ Create `.tmp/PLAN.md` with this structure:
 ## Non-Goals (Out of Scope)
 - [What this plan explicitly does NOT cover]
 
+## Issue Hierarchy & Semantic Versioning
+
+This plan will be converted to GitHub issues following Semantic Versioning (https://semver.org/) with version numbers in titles:
+
+| Level | Type | Title Format | Version | Description |
+|-------|------|--------------|---------|-------------|
+| 1 | Feature | `[{N}] Feat - {title}` | MAJOR (X.0.0) | Significant functionality changes |
+| 2 | Story | `[{N.M}] Story - {title}` | MINOR (x.Y.0) | User-facing functionality additions |
+| 3 | Task | `[{N.M.P}] Task - {title}` | PATCH (x.y.Z) | Technical implementation details |
+
+### Version Number Format
+- **Features**: Sequential numbers starting from 1: `[1] Feat - ...`, `[2] Feat - ...`, `[3] Feat - ...`
+- **Stories**: `{feature}.{story_number}`: `[1.1] Story - ...`, `[1.2] Story - ...`, `[2.1] Story - ...`
+- **Tasks**: `{feature}.{story}.{task_number}`: `[1.1.1] Task - ...`, `[1.1.2] Task - ...`, `[1.2.1] Task - ...`
+
+### Issue Structure Example
+```
+[1] Feat - Add User Authentication
+  ├── [1.1] Story - Implement OAuth with GitHub
+  │     ├── [1.1.1] Task - Create OAuth callback handler
+  │     ├── [1.1.2] Task - Store user tokens securely
+  │     └── [1.1.3] Task - Handle OAuth errors
+  ├── [1.2] Story - Implement session management
+  │     └── [1.2.1] Task - Create session middleware
+  └── [1.3] Story - Add logout functionality
+
+[2] Feat - Add User Profile Management
+  └── [2.1] Story - Create profile page
+```
+
+### Features (MAJOR)
+- [1] Feat - Main capability being added
+- [2] Feat - Second major feature (if applicable)
+
+### Stories (MINOR - under Features)
+- [1.1] Story - First user-facing implementation under Feature [1]
+- [1.2] Story - Second user-facing implementation under Feature [1]
+
+### Tasks (PATCH - under Stories)
+- [1.1.1] Task - First technical step under Story [1.1]
+- [1.1.2] Task - Second technical step under Story [1.1]
+
 ## Step-by-Step Implementation Guide
 
 ### Phase 1: [Name]

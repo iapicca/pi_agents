@@ -17,18 +17,14 @@ about: Create a high-level feature issue
 - [ ] {{Criterion 2}}
 - [ ] {{Criterion 3}}
 
-### Reference
-- **PLAN.md Section:** {{SECTION}}
-- **Related Pre-Plan:** {{PRE_PLAN_SECTION}}
+### Related Stories
+- [ ] https://github.com/<project_owner_name>/<project_name>/issues/<issue_number>
+- [ ] https://github.com/<project_owner_name>/<project_name>/issues/<issue_number>
 
-### Dependencies
-- {{Dependency 1}}
-- {{Dependency 2}}
+### Documentation
+- [Link]({{DOC_URL}})
+- [Link]({{DOC_URL}})
+- [Link]({{DOC_URL}})
 
 ### Notes
 {{Additional notes, context, or links}}
-
----
-**Type:** Feature  
-**Created from:** PLAN.md  
-**Status:** 🎯 Planned

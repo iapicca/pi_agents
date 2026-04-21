@@ -52,6 +52,40 @@ This project uses a **strict planning-only workflow** with three agents: RESEARC
 5. **ORGANIZING** → ORGANIZER creates GitHub issues
 6. **COMPLETE** → Workflow finished
 
+## Semantic Versioning for Issues
+
+All GitHub issues MUST include semantic version numbers in titles (https://semver.org/):
+
+| Issue Type | Version Level | Title Format | Example |
+|------------|---------------|--------------|---------|
+| **Feature** | MAJOR (X.0.0) | `[{N}] Feat - {title}` | `[1] Feat - Add user authentication` |
+| **Story** | MINOR (x.Y.0) | `[{N.M}] Story - {title}` | `[1.5] Story - Implement OAuth login` |
+| **Task** | PATCH (x.y.Z) | `[{N.M.P}] Task - {title}` | `[1.5.3] Task - Create OAuth callback` |
+
+### Version Number Rules
+
+- **Features**: Sequential whole numbers: `[1]`, `[2]`, `[3]`, etc.
+- **Stories**: `{feature}.{story_number}` format: `[1.1]`, `[1.2]`, `[2.1]`, etc.
+- **Tasks**: `{feature}.{story}.{task_number}` format: `[1.1.1]`, `[1.1.2]`, `[1.2.1]`, etc.
+
+### Issue Hierarchy with Version Numbers
+
+```
+[1] Feat - Add User Authentication
+  ├── [1.1] Story - Implement OAuth with GitHub
+  │     ├── [1.1.1] Task - Create OAuth callback handler
+  │     ├── [1.1.2] Task - Store user tokens securely
+  │     └── [1.1.3] Task - Handle OAuth errors
+  ├── [1.2] Story - Implement session management
+  │     ├── [1.2.1] Task - Create session middleware
+  │     └── [1.2.2] Task - Configure session store
+  └── [1.3] Story - Add logout functionality
+
+[2] Feat - Add User Profile Management
+  └── [2.1] Story - Create profile page
+        └── [2.1.1] Task - Build profile UI components
+```
+
 ## Usage
 
 ### Start a New Plan
@@ -115,6 +149,67 @@ The following execute WITHOUT confirmation:
 
 All other commands require explicit user approval.
 
+## Tool Restrictions by Phase
+
+### RESEARCHING Phase
+- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`
+- Can ask user for documentation links via `ask_user`
+
+### PLANNING Phase
+- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `ask_user`, `subagent`
+- **FORBIDDEN**: `write`, `edit` (NEVER write code)
+- Must resolve ambiguities with `ask_user` tool
+
+### ORGANIZING Phase
+- Allowed: `read`, `bash` (gh-cli commands only)
+- Pre-granted: All `gh issue *` commands
+
+## Template Files
+
+All agent outputs follow structured templates:
+
+- **Pre-Plan**: `.pi/prompts/pre-plan.md` - RESEARCHER output
+- **Plan**: `.pi/prompts/plan.md` - PLANNER output
+- **Feature Issue**: `.pi/prompts/issue-templates/feature.md` - GitHub feature template
+- **Story Issue**: `.pi/prompts/issue-templates/story.md` - GitHub story template
+- **Task Issue**: `.pi/prompts/issue-templates/task.md` - GitHub task template
+
+## File Structure
+
+```
+.pi/
+├── AGENTS.md                    # This file - global workflow instructions
+├── extensions/
+│   └── planning-orchestrator.ts # Workflow enforcement + permission gates
+├── agents/                       # Agent definitions (used by subagent tool)
+│   ├── researcher.md            # Research agent
+│   ├── planner.md               # Planning agent (primary)
+│   └── organizer.md             # Organization agent
+├── skills/
+│   └── gh-cli/
+│       └── SKILL.md             # GitHub CLI operations
+├── prompts/
+│   ├── pre-plan.md              # Pre-plan template
+│   ├── plan.md                  # Plan template
+│   └── issue-templates/
+│       ├── feature.md           # Feature issue template
+│       ├── story.md             # Story issue template
+│       └── task.md              # Task issue template
+└── settings.json                # Configuration
+```
+
+## State Machine Enforcement
+
+This workflow is enforced by the `planning-orchestrator.ts` extension. Agents cannot bypass phases or skip user approval gates.
+
+### Enforcement Mechanisms
+
+1. **State Machine**: Tracks workflow phase (`IDLE` → `RESEARCHING` → `PLANNING` → `PENDING_APPROVAL` → `ORGANIZING` → `COMPLETE`)
+2. **User Gates**: Hard stops requiring explicit user confirmation before phase transitions
+3. **Pre-granted Permissions**: Allows specific bash commands (gh issue create, gh issue list) without asking
+4. **Ambiguity Detection**: Prompts user when planner detects unclear requirements
+5. **Tool Filtering**: Extension blocks unauthorized tool usage (e.g., `write`/`edit` in PLANNING phase)
+
 ## Anti-Patterns to Avoid
 
 1. **DON'T** skip the research phase
@@ -124,44 +219,13 @@ All other commands require explicit user approval.
 5. **DON'T** use unofficial documentation sources
 6. **DON'T** make assumptions about ambiguous requirements
 
-## Templates
-
-- **Pre-Plan**: `.pi/prompts/pre-plan.md`
-- **Plan**: `.pi/prompts/plan.md`
-- **Feature Issue**: `.pi/prompts/issue-templates/feature.md`
-- **Story Issue**: `.pi/prompts/issue-templates/story.md`
-- **Task Issue**: `.pi/prompts/issue-templates/task.md`
-
-## File Structure
-
-```
-.pi/
-├── AGENTS.md                    # This file
-├── extensions/
-│   └── planning-orchestrator.ts # Workflow enforcement
-├── agents/
-│   ├── researcher.md            # Research agent
-│   ├── planner.md               # Planning agent (primary)
-│   └── organizer.md             # Organization agent
-├── skills/
-│   └── gh-cli/
-│       └── SKILL.md              # GitHub CLI operations
-├── prompts/
-│   ├── pre-plan.md              # Pre-plan template
-│   ├── plan.md                  # Plan template
-│   └── issue-templates/
-│       ├── feature.md
-│       ├── story.md
-│       └── task.md
-└── settings.json                # Configuration
-```
-
 ## Success Metrics
 
 - ✅ Planner NEVER writes code
 - ✅ Researcher uses only official docs
 - ✅ User approval gate stops workflow at PLAN.md
 - ✅ Organizer only runs after explicit approval
+- ✅ Issues follow Semantic Versioning with version numbers in titles (e.g., `[1] Feat`, `[1.5] Story`, `[1.5.3] Task`)
 - ✅ No assumptions without user clarification
 - ✅ Workflow cannot be skipped
 
@@ -171,6 +235,7 @@ All other commands require explicit user approval.
 - [Extension Development](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/docs/extensions.md)
 - [Pi Skills](https://github.com/badlogic/pi-skills)
 - [Agent Skills Standard](https://agentskills.io/specification)
+- [Semantic Versioning](https://semver.org/)
 
 ---
 

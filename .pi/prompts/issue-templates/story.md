@@ -5,9 +5,6 @@ about: Create a user story issue (child of a Feature)
 
 ## Story: {{TITLE}}
 
-### User Story
-As a {{USER_TYPE}}, I want {{DESIRE}}, so that {{BENEFIT}}.
-
 ### Description
 {{DESCRIPTION}}
 
@@ -16,19 +13,18 @@ As a {{USER_TYPE}}, I want {{DESIRE}}, so that {{BENEFIT}}.
 - [ ] {{Criterion 2}}
 - [ ] {{Criterion 3}}
 
-### Tasks
-- [ ] {{Task reference or link}}
-- [ ] {{Task reference or link}}
+### Related Tasks
+- [ ] https://github.com/<project_owner_name>/<project_name>/issues/<issue_number>
+- [ ] https://github.com/<project_owner_name>/<project_name>/issues/<issue_number>
 
 ### Reference
-- **Parent Feature:** #{{FEATURE_NUMBER}}
-- **PLAN.md Section:** {{SECTION}}
+- **Parent Feature:** https://github.com/<project_owner_name>/<project_name>/issues/<issue_number>
+
+### Documentation
+- [Link]({{DOC_URL}})
+- [Link]({{DOC_URL}})
+- [Link]({{DOC_URL}})
 
 ### Notes
 {{Implementation notes, edge cases, or considerations}}
 
----
-**Type:** Story  
-**Parent Feature:** #{{FEATURE_NUMBER}}  
-**Created from:** PLAN.md  
-**Status:** 📋 Ready for Implementation
