@@ -22,10 +22,10 @@ This document outlines the implementation of a **strict, planning-only workflow 
 │       └── task.md
 └── settings.json                       # Enable extension + agents
 ## Reusable Components (Don't Reinvent)
+
 Based on research of available Pi packages and examples:
 | Component | Source | Purpose | Usage |
 |-----------|--------|---------|-------|
-| **brave-search** | [badlogic/pi-skills](https://github.com/badlogic/pi-skills/tree/main/brave-search) | Web search for documentation | Install as skill for RESEARCHER |
 | **subagent** | [pi-mono examples](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/examples/extensions/subagent) | Spawn isolated sub-agents | **Reference implementation** for our orchestrator |
 | **plan-mode** | [pi-mono examples](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/examples/extensions/plan-mode) | Read-only exploration mode | **Pattern reference** for phase gating |
 **Decision**: The `subagent` extension provides the core infrastructure we need. We'll create a **custom orchestrator extension** that:
@@ -73,7 +73,7 @@ Implement handlers for Pi's extension events:
   - API authentication requirements (verified against docs, not assumed)
   - Potential risks/blockers
   - Links to official documentation consulted
-**Tools**: `read`, `grep`, `find`, `ls`, `bash` (for `webfetch` via brave-search skill)
+**Tools**: `read`, `grep`, `find`, `ls`, `bash` (for `webfetch`), `ask_user` (to request documentation links from user)
 **Documentation**:
 - [Agent Definition Format](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/examples/extensions/subagent/agents/scout.md)
 - [Agent Frontmatter Schema](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/examples/extensions/subagent/agents.ts)
@@ -165,8 +165,7 @@ Enable the orchestrator extension and configure agent discovery:
 4. Test subagent invocation via orchestrator
 ### Step 3: Skill Setup
 1. Create `.pi/skills/gh-cli/SKILL.md`
-2. Install brave-search skill: `git clone https://github.com/badlogic/pi-skills ~/.pi/agent/skills/pi-skills`
-3. Configure gh-cli authentication
+2. Configure gh-cli authentication
 ### Step 4: Templates
 1. Create `.pi/prompts/pre-plan.md`
 2. Create `.pi/prompts/plan.md`

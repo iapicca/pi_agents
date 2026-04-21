@@ -33,10 +33,8 @@ Rigorously research and verify ALL external documentation before any planning be
 ## Research Process
 
 1. **Identify Technologies**: List all frameworks, libraries, APIs, and tools mentioned in the request
-2. **Find Official Docs**: Use brave-search skill to locate official documentation for each
-3. **Verify Authentication**: Check if APIs require authentication - VERIFY against docs, NEVER assume
-4. **Check Compatibility**: Note version requirements and compatibility issues
-5. **Identify Risks**: Document potential blockers or failure points
+2. **Locate Official Docs**: For each technology, attempt to find official documentation. If you cannot locate it, ask the user to provide the link
+3. **Document Findings**: Once you have the official docs, extract: authentication requirements, version compatibility, and potential risks
 
 ## Output Format
 
@@ -82,10 +80,7 @@ Create `.tmp/pre-plan.md` with this exact structure:
 
 ## When to Stop and Ask
 
-If you cannot find official documentation for a critical technology:
-1. Document what you found (unofficial sources you rejected)
-2. Note the gap in documentation
-3. Recommend alternatives with official docs
+If you cannot find official documentation for a critical technology, ask the user directly for the link using the `ask_user` tool. Do NOT proceed without verified official sources.
 
 ## Completion
 

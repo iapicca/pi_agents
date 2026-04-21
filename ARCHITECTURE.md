@@ -56,14 +56,13 @@ The orchestrator extension maintains workflow state:
 ---
 ### 4. Progressive Disclosure via Skills
 Following Pi's architecture, capabilities are loaded on-demand:
-#### Brave Search Skill (Third-Party)
-- Web search and content extraction via Brave Search API
-- Used by RESEARCHER for finding official documentation
-- **Not** used for general web search (prevents StackOverflow reliance)
 #### gh-cli Skill (Custom)
 - Encapsulates GitHub CLI operations
 - Pre-granted execution for planning workflow commands
 - Isolated from other bash operations
+
+### Research Approach
+The RESEARCHER agent attempts to locate official documentation using webfetch or known URLs. If official documentation cannot be found for a critical technology, the agent asks the user to provide the link rather than relying on web search.
 ---
 ### 5. Template-Driven Outputs
 All agent outputs follow structured templates:
@@ -112,8 +111,8 @@ All agent outputs follow structured templates:
                     ▼                   ▼
         ┌──────────────────┐   ┌──────────────────┐
         │   SUBAGENT TOOL │   │   SKILL LOADER   │
-        │   (built-in)     │   │   (brave-search, │
-        │                  │   │    gh-cli)       │
+        │   (built-in)     │   │   (gh-cli)       │
+        │                  │   │                  │
         └────────┬─────────┘   └──────────────────┘
                  │
     ┌────────────┼────────────┐
