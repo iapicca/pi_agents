@@ -101,7 +101,7 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
 
   // Status update helper
   function updateStatus(ctx: ExtensionContext): void {
-    ctx.ui.setStatus("planning-workflow", pi.ui.theme.fg("accent", getStateDisplay(workflow.state)));
+    ctx.ui.setStatus("planning-workflow", ctx.ui.theme.fg("accent", getStateDisplay(workflow.state)));
   }
 
   // Persist workflow state
