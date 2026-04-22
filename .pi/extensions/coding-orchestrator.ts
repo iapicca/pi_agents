@@ -4,13 +4,17 @@
  * Enforces a strict coding workflow for implementing GitHub issues:
  * 1. Parse issue URL and determine type (feature/story/task)
  * 2. Create feature branch: feat/<number>-<slug>
- * 3. For each task (in semantic versioning order):
- *    a. Create task branch from feature branch
- *    b. IMPLEMENTATION PLANNER analyzes codebase and writes IMPLEMENTATION.md
- *    c. CODER reads IMPLEMENTATION.md and writes/edits code
+ * 3. Create story branches: story/<number>.<minor>-<slug>
+ * 4. Pre-planning phase: feature plan + story plans (upfront)
+ * 5. For each task (in semantic versioning order):
+ *    a. Create task branch from story branch
+ *    b. IMPLEMENTATION PLANNER analyzes codebase and writes task-implementation-{N.M.P}.md
+ *    c. CODER reads all 3 implementation files and writes/edits code
  *    d. Run first-party linter
- *    e. PR-WRITER commits, pushes, creates PR to feature branch, merges automatically
- *    f. Clean .tmp
+ *    e. PR-WRITER commits, pushes, creates task PR to story branch, merges
+ *    f. Check off task in story plan, delete task implementation file
+ *    g. If last task of story: PR-WRITER creates story PR to feature branch, merges
+ *    h. Check off story in feature plan, delete story implementation file
  *
  * Features:
  * - State machine tracking coding phases
@@ -24,17 +28,29 @@ import { Type } from "@sinclair/typebox";
 type CodingState =
   | "IDLE"
   | "FETCHING_ISSUE"
-  | "PLANNING_IMPLEMENTATION"
+  | "PLANNING_FEATURE"
+  | "PLANNING_STORIES"
+  | "PLANNING_TASK"
   | "CODING"
   | "LINTING"
   | "CREATING_PR"
   | "COMPLETE_TASK"
   | "COMPLETE_ALL";
 
+type PrType = "task" | "story" | "none";
+
 interface TaskInfo {
   number: number;
   title: string;
   version: string;
+  storyVersion: string;
+}
+
+interface StoryInfo {
+  number: number;
+  title: string;
+  version: string;
+  tasks: TaskInfo[];
 }
 
 interface CodingWorkflowData {
@@ -43,11 +59,15 @@ interface CodingWorkflowData {
   issueNumber: number;
   issueType: "feature" | "story" | "task" | "unknown";
   featureBranch: string;
+  currentStoryIndex: number;
   currentTaskIndex: number;
+  totalStories: number;
   totalTasks: number;
+  stories: StoryInfo[];
   tasks: TaskInfo[];
   repoOwner: string;
   repoName: string;
+  prType: PrType;
   startTime: number;
 }
 
@@ -75,10 +95,11 @@ const PRE_GRANTED_COMMANDS = [
   /^git merge\b/,
   /^git rebase\b/,
   /^mkdir -p \.tmp/,
-  /^rm -rf \.tmp\//,
+  /^rm \.tmp\//,
   /^ls \.tmp\//,
   /^cat \.tmp\//,
   /^touch \.tmp\//,
+  /^sed -i/,
   /^npm run lint\b/,
   /^npm run fix\b/,
   /^pnpm lint\b/,
@@ -120,7 +141,9 @@ function getStateDisplay(state: CodingState): string {
   const displays: Record<CodingState, string> = {
     IDLE: "⏸ Idle - Ready to code",
     FETCHING_ISSUE: "📥 Fetching issue details",
-    PLANNING_IMPLEMENTATION: "📝 Planning implementation",
+    PLANNING_FEATURE: "📝 Planning feature architecture",
+    PLANNING_STORIES: "📝 Planning story strategies",
+    PLANNING_TASK: "📝 Planning task implementation",
     CODING: "💻 Writing code",
     LINTING: "🔍 Running linter",
     CREATING_PR: "🚀 Creating PR",
@@ -145,11 +168,15 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
     issueNumber: 0,
     issueType: "unknown",
     featureBranch: "",
+    currentStoryIndex: 0,
     currentTaskIndex: 0,
+    totalStories: 0,
     totalTasks: 0,
+    stories: [],
     tasks: [],
     repoOwner: "",
     repoName: "",
+    prType: "none",
     startTime: Date.now(),
   };
 
@@ -173,11 +200,15 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
       issueNumber: workflow.issueNumber,
       issueType: workflow.issueType,
       featureBranch: workflow.featureBranch,
+      currentStoryIndex: workflow.currentStoryIndex,
       currentTaskIndex: workflow.currentTaskIndex,
+      totalStories: workflow.totalStories,
       totalTasks: workflow.totalTasks,
+      stories: workflow.stories,
       tasks: workflow.tasks,
       repoOwner: workflow.repoOwner,
       repoName: workflow.repoName,
+      prType: workflow.prType,
     });
   }
 
@@ -229,11 +260,15 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         issueNumber,
         issueType: "unknown",
         featureBranch: "",
+        currentStoryIndex: 0,
         currentTaskIndex: 0,
+        totalStories: 0,
         totalTasks: 0,
+        stories: [],
         tasks: [],
         repoOwner: owner,
         repoName: repo,
+        prType: "none",
         startTime: Date.now(),
       };
 
@@ -244,29 +279,120 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         content: [
           {
             type: "text",
-            text: `🎯 Starting coding workflow for issue #${issueNumber}\n\n🔗 ${params.issueUrl}\n\nWorkflow:\n1. Fetch issue details (type: feature/story/task)\n2. Create feature branch\n3. For each task (in semver order):\n   a. IMPLEMENTATION PLANNER → .tmp/IMPLEMENTATION.md\n   b. CODER → write/edit code\n   c. Linter → validate\n   d. PR-WRITER → push, create PR, merge to feature branch\n4. Clean up\n\n📥 Fetching issue details...`,
+            text: `🎯 Starting coding workflow for issue #${issueNumber}\n\n🔗 ${params.issueUrl}\n\nWorkflow:\n1. Fetch issue details (type: feature/story/task)\n2. Create feature branch\n3. Pre-planning: feature architecture + story strategies\n4. For each task (in semver order):\n   a. IMPLEMENTATION PLANNER → task-implementation-{N.M.P}.md\n   b. CODER → write/edit code (loads all 3 impl files)\n   c. Linter → validate\n   d. PR-WRITER → push, create task PR, merge to story branch\n   e. If last task of story → story PR, merge to feature branch\n5. Clean up\n\n📥 Fetching issue details...`,
           },
         ],
       };
     },
   });
 
-  // Tool: submit_implementation - Transition from planner to coder
+  // Tool: submit_feature_plan - Transition from feature planning to story planning
   pi.registerTool({
-    name: "submit_implementation",
-    label: "Submit Implementation",
-    description: "Called by IMPLEMENTATION PLANNER to submit the completed IMPLEMENTATION.md.",
+    name: "submit_feature_plan",
+    label: "Submit Feature Plan",
+    description: "Called by IMPLEMENTATION PLANNER to submit the completed feature implementation plan.",
     parameters: Type.Object({
-      implementationPath: Type.String({ default: ".tmp/IMPLEMENTATION.md" }),
+      planPath: Type.String({ default: ".tmp/feat-implementation-{N}.md" }),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "PLANNING_IMPLEMENTATION") {
+      if (workflow.state !== "PLANNING_FEATURE") {
         return {
           content: [
             {
               type: "text",
-              text: `❌ Cannot submit implementation: Workflow is in ${workflow.state} state.`,
+              text: `❌ Cannot submit feature plan: Workflow is in ${workflow.state} state.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      workflow.state = "PLANNING_STORIES";
+      updateStatus(ctx);
+      persistState();
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `✅ Feature plan submitted!\n\n📄 Location: ${params.planPath}\n\n📝 Phase: Planning story strategies...`,
+          },
+        ],
+      };
+    },
+  });
+
+  // Tool: submit_story_plan - Transition from story planning to next story or task planning
+  pi.registerTool({
+    name: "submit_story_plan",
+    label: "Submit Story Plan",
+    description: "Called by IMPLEMENTATION PLANNER to submit a completed story implementation plan.",
+    parameters: Type.Object({
+      planPath: Type.String({ default: ".tmp/story-implementation-{N.M}.md" }),
+      isLastStory: Type.Boolean({ default: false, description: "Whether this is the last story to plan" }),
+    }),
+
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (workflow.state !== "PLANNING_STORIES") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `❌ Cannot submit story plan: Workflow is in ${workflow.state} state.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (params.isLastStory) {
+        workflow.state = "PLANNING_TASK";
+        updateStatus(ctx);
+        persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ All story plans submitted!\n\n📄 Last story plan: ${params.planPath}\n\n📝 Phase: Planning first task implementation...`,
+            },
+          ],
+        };
+      }
+
+      // More stories to plan - stay in PLANNING_STORIES
+      workflow.currentStoryIndex++;
+      updateStatus(ctx);
+      persistState();
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `✅ Story plan submitted!\n\n📄 Location: ${params.planPath}\n\n📝 Phase: Planning next story strategy...`,
+          },
+        ],
+      };
+    },
+  });
+
+  // Tool: submit_task_plan - Transition from task planner to coder
+  pi.registerTool({
+    name: "submit_task_plan",
+    label: "Submit Task Plan",
+    description: "Called by IMPLEMENTATION PLANNER to submit the completed task implementation plan.",
+    parameters: Type.Object({
+      planPath: Type.String({ default: ".tmp/task-implementation-{N.M.P}.md" }),
+    }),
+
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (workflow.state !== "PLANNING_TASK") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `❌ Cannot submit task plan: Workflow is in ${workflow.state} state.`,
             },
           ],
           isError: true,
@@ -281,7 +407,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         content: [
           {
             type: "text",
-            text: `✅ Implementation plan submitted!\n\n📄 Location: ${params.implementationPath}\n\n💻 Phase: CODER - Writing code based on implementation plan...`,
+            text: `✅ Task plan submitted!\n\n📄 Location: ${params.planPath}\n\n💻 Phase: CODER - Writing code based on implementation plan (loading feat + story + task plans)...`,
           },
         ],
       };
@@ -316,7 +442,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         content: [
           {
             type: "text",
-            text: `✅ Coding complete and linter passed!\n\n🚀 Phase: PR-WRITER - Creating PR and merging to feature branch...`,
+            text: `✅ Coding complete and linter passed!\n\n🚀 Phase: PR-WRITER - Creating PR and merging...`,
           },
         ],
       };
@@ -327,9 +453,10 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "complete_pr",
     label: "Complete PR",
-    description: "Called by PR-WRITER after PR is created and merged to feature branch.",
+    description: "Called by PR-WRITER after PR is created and merged.",
     parameters: Type.Object({
       prUrl: Type.String({ description: "URL of the created and merged PR" }),
+      prType: Type.String({ description: "Type of PR: task or story", default: "task" }),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -345,7 +472,26 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         };
       }
 
+      if (params.prType === "story") {
+        // Story PR merged - story is complete
+        workflow.state = "COMPLETE_TASK";
+        workflow.prType = "none";
+        updateStatus(ctx);
+        persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Story PR merged!\n\n🔗 ${params.prUrl}\n\n🧹 Story branch merged to feature branch. Preparing for next task...`,
+            },
+          ],
+        };
+      }
+
+      // Task PR merged
       workflow.state = "COMPLETE_TASK";
+      workflow.prType = "none";
       updateStatus(ctx);
       persistState();
 
@@ -353,22 +499,23 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         content: [
           {
             type: "text",
-            text: `✅ PR merged!\n\n🔗 ${params.prUrl}\n\n🧹 Cleaning .tmp and preparing for next task...`,
+            text: `✅ Task PR merged!\n\n🔗 ${params.prUrl}\n\n🧹 Task implementation file cleaned. Preparing for next task...`,
           },
         ],
       };
     },
   });
 
-  // Tool: next_task - Transition to next task or complete
+  // Tool: next_task - Transition to next task, story PR, or complete
   pi.registerTool({
     name: "next_task",
     label: "Next Task",
     description:
-      "Transition to the next task in the iteration. Called by CODER agent after a task is fully processed.",
+      "Transition to the next task in the iteration, or trigger story PR creation, or complete. Called by CODER agent after a task is fully processed.",
     parameters: Type.Object({
       taskCompleted: Type.Boolean({ description: "Whether the current task was completed successfully" }),
-      prUrl: Type.Optional(Type.String({ description: "URL of the created PR" })),
+      isLastTaskOfStory: Type.Boolean({ description: "Whether this was the last task of the current story", default: false }),
+      prUrl: Type.Optional(Type.String({ description: "URL of the created task PR" })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -389,6 +536,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
 
       workflow.currentTaskIndex++;
 
+      // Check if all tasks are complete
       if (workflow.currentTaskIndex >= workflow.totalTasks) {
         workflow.state = "COMPLETE_ALL";
         updateStatus(ctx);
@@ -400,14 +548,33 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
           content: [
             {
               type: "text",
-              text: `🎉 Coding Workflow Complete!\n\n✅ Tasks Completed: ${workflow.totalTasks}\n⏱️ Duration: ${duration}s\n📋 Feature Branch: \`${workflow.featureBranch}\`\n\nAll tasks have been implemented and merged to the feature branch.\nReview and merge \`${workflow.featureBranch}\` to main when ready.`,
+              text: `🎉 Coding Workflow Complete!\n\n✅ Stories Completed: ${workflow.totalStories}\n✅ Tasks Completed: ${workflow.totalTasks}\n⏱️ Duration: ${duration}s\n📋 Feature Branch: \`${workflow.featureBranch}\`\n\nAll stories and tasks have been implemented and merged to the feature branch.\nReview and merge \`${workflow.featureBranch}\` to main when ready.`,
             },
           ],
         };
       }
 
+      // If last task of story, trigger story PR creation
+      if (params.isLastTaskOfStory) {
+        workflow.state = "CREATING_PR";
+        workflow.prType = "story";
+        updateStatus(ctx);
+        persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `➡️ Last task of story completed!\n\n🚀 Phase: PR-WRITER - Creating story PR and merging to feature branch...`,
+            },
+          ],
+        };
+      }
+
+      // More tasks to process
       const nextTask = workflow.tasks[workflow.currentTaskIndex];
-      workflow.state = "PLANNING_IMPLEMENTATION";
+      workflow.state = "PLANNING_TASK";
+      workflow.prType = "none";
       updateStatus(ctx);
       persistState();
 
@@ -415,7 +582,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         content: [
           {
             type: "text",
-            text: `➡️ Moving to next task (${workflow.currentTaskIndex + 1}/${workflow.totalTasks})\n\nTask #${nextTask.number}: ${nextTask.title}\nVersion: ${nextTask.version}\n\n📝 Calling IMPLEMENTATION PLANNER...`,
+            text: `➡️ Moving to next task (${workflow.currentTaskIndex + 1}/${workflow.totalTasks})\n\nTask #${nextTask.number}: ${nextTask.title}\nVersion: ${nextTask.version}\n\n📝 Calling IMPLEMENTATION PLANNER for task-level plan...`,
           },
         ],
       };
@@ -447,11 +614,15 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         issueNumber: 0,
         issueType: "unknown",
         featureBranch: "",
+        currentStoryIndex: 0,
         currentTaskIndex: 0,
+        totalStories: 0,
         totalTasks: 0,
+        stories: [],
         tasks: [],
         repoOwner: "",
         repoName: "",
+        prType: "none",
         startTime: Date.now(),
       };
       updateStatus(ctx);
@@ -464,13 +635,17 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
     description: "Show current coding workflow status",
     handler: async (_args, ctx) => {
       const currentTask = workflow.tasks[workflow.currentTaskIndex];
+      const currentStory = workflow.stories[workflow.currentStoryIndex];
       const status = `
 📊 Coding Workflow Status
 ${"─".repeat(40)}
 State: ${workflow.state}
+PR Type: ${workflow.prType}
 Issue: #${workflow.issueNumber} (${workflow.issueType})
 Feature Branch: ${workflow.featureBranch || "(not created)"}
-Progress: ${workflow.currentTaskIndex}/${workflow.totalTasks} tasks
+Stories: ${workflow.currentStoryIndex}/${workflow.totalStories}
+Tasks: ${workflow.currentTaskIndex}/${workflow.totalTasks}
+Current Story: ${currentStory ? `#${currentStory.number} ${currentStory.title}` : "(none)"}
 Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(none)"}
       `.trim();
       ctx.ui.notify(status, "info");
@@ -520,31 +695,95 @@ Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(
   });
 
   pi.on("before_agent_start", async () => {
-    if (workflow.state === "PLANNING_IMPLEMENTATION") {
+    if (workflow.state === "PLANNING_FEATURE") {
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER PHASE]
+          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER - FEATURE LEVEL]
 
-You are the IMPLEMENTATION PLANNER agent in a strict coding workflow.
+You are the IMPLEMENTATION PLANNER agent planning at the FEATURE level.
 
 YOUR MISSION:
-1. Read the target task issue and its parent story/feature for context
-2. Analyze the codebase to identify relevant files, APIs, and patterns
-3. Investigate the best implementation strategy
-4. Write a detailed IMPLEMENTATION.md in ./.tmp/
+1. Read the target feature issue
+2. Analyze the codebase for overall architecture and patterns
+3. Identify all child stories
+4. Write feat-implementation-{N}.md
+
+CONSTRAINTS:
+- NEVER write implementation code
+- Focus on architecture, design decisions, and cross-story interactions
+- Story interaction descriptions MUST be 80 characters or fewer
+- Include a checklist of all stories (unchecked)
+- Do NOT include task-level or file-level details
+
+OUTPUT:
+Create .tmp/feat-implementation-{N}.md following .pi/prompts/impl-templates/feature.md
+
+When complete, call submit_feature_plan tool.`,
+          display: false,
+        },
+      };
+    }
+
+    if (workflow.state === "PLANNING_STORIES") {
+      return {
+        message: {
+          customType: "coding-context",
+          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER - STORY LEVEL]
+
+You are the IMPLEMENTATION PLANNER agent planning at the STORY level.
+
+YOUR MISSION:
+1. Read the target story issue and its parent feature
+2. Read the feature implementation plan (feat-implementation-{N}.md)
+3. Analyze the codebase within the feature's architectural context
+4. Identify all child tasks
+5. Write story-implementation-{N.M}.md
+
+CONSTRAINTS:
+- NEVER write implementation code
+- Focus on story strategy and cross-task interactions
+- Task interaction descriptions MUST be 80 characters or fewer
+- Include a checklist of all tasks (unchecked)
+- Do NOT duplicate feature-level architecture - REFERENCE it
+- Do NOT include specific file/line changes
+
+OUTPUT:
+Create .tmp/story-implementation-{N.M}.md following .pi/prompts/impl-templates/story.md
+
+When complete, call submit_story_plan tool.`,
+          display: false,
+        },
+      };
+    }
+
+    if (workflow.state === "PLANNING_TASK") {
+      return {
+        message: {
+          customType: "coding-context",
+          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER - TASK LEVEL]
+
+You are the IMPLEMENTATION PLANNER agent planning at the TASK level.
+
+YOUR MISSION:
+1. Read the target task issue and its parent story/feature
+2. Read the story implementation plan (story-implementation-{N.M}.md)
+3. Read the feature implementation plan (feat-implementation-{N}.md)
+4. Analyze the CURRENT codebase state (post-previous-task merges)
+5. Write task-implementation-{N.M.P}.md
 
 CONSTRAINTS:
 - NEVER write implementation code
 - Use ONLY official documentation and the existing codebase
-- Identify the first-party linter command (e.g., npm run lint, cargo clippy)
-- Verify no new dependencies are needed (unless stated in the issue)
+- Identify the first-party linter command
+- Verify no new dependencies are needed
 - Be specific: name exact files, functions, and line numbers
+- Do NOT duplicate feature or story content - REFERENCE it
 
 OUTPUT:
-Create .tmp/IMPLEMENTATION.md following the template in .pi/prompts/implementation.md
+Create .tmp/task-implementation-{N.M.P}.md following .pi/prompts/impl-templates/task.md
 
-When complete, call submit_implementation tool.`,
+When complete, call submit_task_plan tool.`,
           display: false,
         },
       };
@@ -559,13 +798,16 @@ When complete, call submit_implementation tool.`,
 You are the CODER agent in a strict coding workflow.
 
 YOUR MISSION:
-1. Read .tmp/IMPLEMENTATION.md
-2. Write/edit/delete code as specified
-3. Run the first-party linter identified in IMPLEMENTATION.md
-4. Fix any linter errors before proceeding
+1. Read feat-implementation-{N}.md (architecture context)
+2. Read story-implementation-{N.M}.md (strategy context)
+3. Read task-implementation-{N.M.P}.md (specific changes)
+4. Write/edit/delete code as specified
+5. Run the first-party linter identified in the task plan
+6. Fix any linter errors before proceeding
 
 CONSTRAINTS:
-- Follow the implementation plan exactly
+- Follow the task implementation plan exactly
+- Use feature/story plans for architectural context
 - Do not deviate from the issue requirements
 - Do not introduce new dependencies (unless stated in the issue)
 - Run linter and ensure it passes before proceeding
@@ -578,24 +820,55 @@ When code is complete and linter passes, call complete_coding tool.`,
     }
 
     if (workflow.state === "CREATING_PR") {
+      if (workflow.prType === "story") {
+        return {
+          message: {
+            customType: "coding-context",
+            content: `[CODING WORKFLOW: PR-WRITER - STORY PR PHASE]
+
+You are the PR-WRITER agent creating a STORY → FEATURE PR.
+
+YOUR MISSION:
+1. Ensure all task changes are present on the story branch
+2. Push the story branch
+3. Create a PR using .pi/prompts/pr-templates/story.md
+4. Merge the PR to the feature branch automatically
+
+PR BODY REQUIREMENTS:
+- Include "Fixes https://github.com/${workflow.repoOwner}/${workflow.repoName}/issues/<story_number>"
+- List all completed tasks in the story
+- Title format: "[N.M] Story - {title}"
+
+TARGET BRANCH: Feature branch (NEVER main/master)
+
+When PR is merged, call complete_pr tool with prType="story" and the PR URL.`,
+            display: false,
+          },
+        };
+      }
+
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: PR-WRITER PHASE]
+          content: `[CODING WORKFLOW: PR-WRITER - TASK PR PHASE]
 
-You are the PR-WRITER agent in a strict coding workflow.
+You are the PR-WRITER agent creating a TASK → STORY PR.
 
 YOUR MISSION:
 1. Commit all changes with a descriptive message
 2. Push the task branch
-3. Create a PR following the template in .pi/prompts/pr.md
-4. Merge the PR to the feature branch automatically
+3. Create a PR using .pi/prompts/pr-templates/task.md
+4. Merge the PR to the story branch automatically
+5. Check off the task in the story implementation plan
+6. Delete the task implementation file
 
 PR BODY REQUIREMENTS:
-- Always include "Fixes https://github.com/${workflow.repoOwner}/${workflow.repoName}/issues/<task_number>"
-- If this is the LAST task of a story, ALSO include "Fixes https://github.com/${workflow.repoOwner}/${workflow.repoName}/issues/<story_number>"
+- Include "Fixes https://github.com/${workflow.repoOwner}/${workflow.repoName}/issues/<task_number>"
+- Title format: "[N.M.P] {task_title}"
 
-When PR is merged, call complete_pr tool with the PR URL.`,
+TARGET BRANCH: Story branch (NEVER main/master or feature branch)
+
+When PR is merged, call complete_pr tool with prType="task" and the PR URL.`,
           display: false,
         },
       };
@@ -622,11 +895,15 @@ When PR is merged, call complete_pr tool with the PR URL.`,
         issueNumber: workflowEntry.data.issueNumber ?? workflow.issueNumber,
         issueType: workflowEntry.data.issueType ?? workflow.issueType,
         featureBranch: workflowEntry.data.featureBranch ?? workflow.featureBranch,
+        currentStoryIndex: workflowEntry.data.currentStoryIndex ?? workflow.currentStoryIndex,
         currentTaskIndex: workflowEntry.data.currentTaskIndex ?? workflow.currentTaskIndex,
+        totalStories: workflowEntry.data.totalStories ?? workflow.totalStories,
         totalTasks: workflowEntry.data.totalTasks ?? workflow.totalTasks,
+        stories: workflowEntry.data.stories ?? workflow.stories,
         tasks: workflowEntry.data.tasks ?? workflow.tasks,
         repoOwner: workflowEntry.data.repoOwner ?? workflow.repoOwner,
         repoName: workflowEntry.data.repoName ?? workflow.repoName,
+        prType: workflowEntry.data.prType ?? workflow.prType,
       };
     }
 

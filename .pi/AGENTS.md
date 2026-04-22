@@ -93,24 +93,42 @@ All GitHub issues MUST include semantic version numbers in titles (https://semve
 
 ## Coding Workflow
 
-A separate **coding workflow** implements approved GitHub issues through code:
+A separate **coding workflow** implements approved GitHub issues through code using a **three-tier branch hierarchy**:
 
 ```
-┌─────────────┐     ┌─────────────────────┐     ┌─────────────┐     ┌─────────────┐
-│   USER      │────▶│       CODER         │────▶│   IMPLEM.   │────▶│    CODER    │
-│ ISSUE URL   │     │    (Primary)        │     │  PLANNER    │     │  (Primary)  │
-└─────────────┘     └─────────────────────┘     └─────────────┘     └──────┬──────┘
-     │                                                                     │
-     │     ┌───────────────────────────────────────────────────────────────┘
-     │     │
-     │     ▼
-     │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-     │  │   LINTER    │────▶│  PR-WRITER  │────▶│   MERGE     │
-     │  │  (validate) │     │  (Subagent) │     │  to feat    │
-     │  └─────────────┘     └─────────────┘     └─────────────┘
+┌─────────────┐     ┌─────────────────────┐     ┌─────────────────────────────┐
+│   USER      │────▶│       CODER         │────▶│   IMPLEMENTATION PLANNER    │
+│ ISSUE URL   │     │    (Primary)        │     │    (level: feature)         │
+└─────────────┘     └─────────────────────┘     └─────────────────────────────┘
+                                                           │
+                                                           ▼
+                                               ┌─────────────────────────────┐
+                                               │   IMPLEMENTATION PLANNER    │
+                                               │    (level: story)           │
+                                               │    (for each story)         │
+                                               └─────────────────────────────┘
+                                                           │
+                                                           ▼
+                                               ┌─────────────────────────────┐
+                                               │   TASK ITERATION LOOP       │
+                                               │    (for each task)          │
+                                               └─────────────────────────────┘
+                                                           │
+     ┌─────────────────────────────────────────────────────┼───────────────────┐
+     │                                                     │                   │
+     ▼                                                     ▼                   ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│  FEATURE    │     │   STORY     │     │    TASK     │  │   LINTER    │  │  PR-WRITER  │
+│   BRANCH    │◄────│   BRANCH    │◄────│   BRANCH    │  │ (validate)  │  │ (Subagent)  │
+│ feat/N-slug │     │story/N.M-slg│     │task/N.M.P-s │  └─────────────┘  └──────┬──────┘
+└─────────────┘     └─────────────┘     └─────────────┘                          │
+     ▲                     ▲                     │                                │
+     │                     │                     │                                │
+     │                     │                     └────────────────────────────────┘
+     │                     │
+     │                     └──── (story PR merged when last task completes)
      │
-     └──────────────────────────────────────────────────────────────────────►
-                              (next task, if any)
+     └─────────────────────────── (feature branch reviewed by user before main merge)
 ```
 
 ### CODER Agent (Primary Entry Point)
@@ -118,27 +136,35 @@ A separate **coding workflow** implements approved GitHub issues through code:
 - **Trigger**: User provides a GitHub issue URL via `/code <url>`
 - **Constraint**: NEVER operates on main/master - always uses feature branches
 - **Iteration**: Processes tasks in semantic versioning order
+- **Three-Tier Branching**: Creates feature → story → task branches
+- **Context Loading**: Loads feat + story + task implementation files for each task
 
 ### IMPLEMENTATION PLANNER Agent (Subagent)
-- **Purpose**: Analyze task issue and codebase, produce detailed IMPLEMENTATION.md
+- **Purpose**: Analyze issues and codebase at feature, story, or task level
 - **Constraint**: NEVER writes implementation code - analysis only
-- **Output**: `.tmp/IMPLEMENTATION.md` with specific file/line references
+- **Levels**:
+  - **Feature**: Architecture, cross-story interactions, story checklist → `feat-implementation-{N}.md`
+  - **Story**: Strategy, cross-task interactions, task checklist → `story-implementation-{N.M}.md`
+  - **Task**: Specific file/line changes → `task-implementation-{N.M.P}.md`
+- **No-Duplication Rule**: Task plans reference (don't repeat) story/feature content
 
 ### PR-WRITER Agent (Subagent)
-- **Purpose**: Commit code, push branch, create PR, merge to feature branch
-- **Constraint**: PRs always target the feature branch, never main/master
-- **Output**: Merged PR with "Fixes" links to close related issues
+- **Purpose**: Commit code, push branch, create PR, merge automatically
+- **Constraint**: Task PRs target story branches; Story PRs target feature branches; NEVER main/master
+- **Output**: Merged PRs with "Fixes" links, checkboxes checked in parent plans, implementation files cleaned up
 
 ### Coding Workflow States
 
 1. **IDLE** → User calls `/code <issue-url>`
 2. **FETCHING_ISSUE** → Parse issue type (feature/story/task)
-3. **PLANNING_IMPLEMENTATION** → IMPLEMENTATION PLANNER analyzes codebase
-4. **CODING** → CODER writes/edits code based on IMPLEMENTATION.md
-5. **LINTING** → Run first-party linter, fix errors
-6. **CREATING_PR** → PR-WRITER commits, pushes, creates PR, merges
-7. **COMPLETE_TASK** → Task done, clean .tmp, proceed to next task
-8. **COMPLETE_ALL** → All tasks finished
+3. **PLANNING_FEATURE** → IMPLEMENTATION PLANNER creates feature architecture plan
+4. **PLANNING_STORIES** → IMPLEMENTATION PLANNER creates story strategy plans (upfront)
+5. **PLANNING_TASK** → IMPLEMENTATION PLANNER analyzes current codebase for task
+6. **CODING** → CODER loads all 3 impl files and writes/edits code
+7. **LINTING** → Run first-party linter, fix errors
+8. **CREATING_PR** → PR-WRITER creates task→story PR or story→feature PR, merges
+9. **COMPLETE_TASK** → Task done, clean implementation file, proceed to next task
+10. **COMPLETE_ALL** → All stories and tasks finished
 
 ### Issue Type Handling
 
@@ -151,8 +177,10 @@ A separate **coding workflow** implements approved GitHub issues through code:
 ### Branch Strategy
 
 - **Feature branch**: `feat/<issue_number>-<slug>` (created from main/master)
-- **Task branch**: `feat/<feature_number>-<slug>-task-<version>` (created from feature branch)
-- **PR target**: Feature branch (never main/master)
+- **Story branch**: `story/<feature_number>.<minor>-<slug>` (created from feature branch)
+- **Task branch**: `task/<feature_number>.<minor>.<patch>-<slug>` (created from story branch)
+- **Task PR target**: Story branch (never main/master or feature branch)
+- **Story PR target**: Feature branch (never main/master)
 - **User review**: Manual merge of feature branch to main/master when ready
 
 ### Semantic Versioning for Task Order
@@ -162,10 +190,16 @@ Tasks are processed in ascending semantic version order:
 
 ### PR Template Rules
 
-All PRs MUST include:
+**Task PRs** (task → story) MUST include:
 - `Fixes https://github.com/<owner>/<repo>/issues/<task_number>`
-- If **last task of story**, ALSO include:
-  `Fixes https://github.com/<owner>/<repo>/issues/<story_number>`
+- Target: story branch
+- Template: `.pi/prompts/pr-templates/task.md`
+
+**Story PRs** (story → feature) MUST include:
+- `Fixes https://github.com/<owner>/<repo>/issues/<story_number>`
+- Target: feature branch
+- Template: `.pi/prompts/pr-templates/story.md`
+- Only created after the last task of the story is merged
 
 ## Usage
 
@@ -289,26 +323,55 @@ All other commands require explicit user approval.
 - Allowed: `read`, `bash` (gh-cli commands only)
 - Pre-granted: All `gh issue *` commands
 
+### PLANNING_FEATURE Phase (Coding Workflow)
+- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
+- **FORBIDDEN**: `write`, `edit` (NEVER write code)
+- Output: `feat-implementation-{N}.md`
+
+### PLANNING_STORIES Phase (Coding Workflow)
+- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
+- **FORBIDDEN**: `write`, `edit` (NEVER write code)
+- Output: `story-implementation-{N.M}.md` (one per story)
+
+### PLANNING_TASK Phase (Coding Workflow)
+- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
+- **FORBIDDEN**: `write`, `edit` (NEVER write code)
+- Output: `task-implementation-{N.M.P}.md`
+
 ### CODING Phase
 - Allowed: `read`, `grep`, `find`, `ls`, `bash`, `subagent`, `write`, `edit`
 - **FORBIDDEN**: Operating on `main`/`master` branch
+- Must load all 3 implementation files before coding
 - Must run linter before invoking PR-WRITER
 - Must not introduce new dependencies (unless stated in issue)
 
 ### PR-CREATION Phase
 - Allowed: `read`, `bash` (git and gh-cli commands only)
 - Pre-granted: `git add`, `git commit`, `git push`, `gh pr create`, `gh pr merge`
-- PRs must target feature branch, never main/master
+- Task PRs must target story branch, never main/master or feature branch
+- Story PRs must target feature branch, never main/master
 
 ## Template Files
 
 All agent outputs follow structured templates:
 
+### Planning Workflow Templates
 - **Pre-Plan**: `.pi/prompts/pre-plan.md` - RESEARCHER output
 - **Plan**: `.pi/prompts/plan.md` - PLANNER output
+
+### Issue Templates
 - **Feature Issue**: `.pi/prompts/issue-templates/feature.md` - GitHub feature template
 - **Story Issue**: `.pi/prompts/issue-templates/story.md` - GitHub story template
 - **Task Issue**: `.pi/prompts/issue-templates/task.md` - GitHub task template
+
+### Implementation Plan Templates (Coding Workflow)
+- **Feature Plan**: `.pi/prompts/impl-templates/feature.md` - Feature architecture template
+- **Story Plan**: `.pi/prompts/impl-templates/story.md` - Story strategy template
+- **Task Plan**: `.pi/prompts/impl-templates/task.md` - Task implementation template
+
+### PR Templates (Coding Workflow)
+- **Task PR**: `.pi/prompts/pr-templates/task.md` - Task → Story PR template
+- **Story PR**: `.pi/prompts/pr-templates/story.md` - Story → Feature PR template
 
 ## File Structure
 
@@ -323,16 +386,21 @@ All agent outputs follow structured templates:
 │   ├── planner.md               # Planning agent (primary)
 │   ├── organizer.md             # Organization agent
 │   ├── coder.md                 # Coding agent (primary)
-│   ├── implementation-planner.md # Implementation planning agent
-│   └── pr-writer.md             # PR creation agent
+│   ├── implementation-planner.md # Implementation planning agent (3 levels)
+│   └── pr-writer.md             # PR creation agent (task + story PRs)
 ├── skills/
 │   └── gh-cli/
 │       └── SKILL.md             # GitHub CLI operations
 ├── prompts/
 │   ├── pre-plan.md              # Pre-plan template
 │   ├── plan.md                  # Plan template
-│   ├── implementation.md        # Implementation plan template
-│   ├── pr.md                    # PR template
+│   ├── impl-templates/          # Implementation plan templates (NEW)
+│   │   ├── feature.md           # Feature architecture template
+│   │   ├── story.md             # Story strategy template
+│   │   └── task.md              # Task implementation template
+│   ├── pr-templates/            # PR templates (NEW)
+│   │   ├── task.md              # Task → Story PR template
+│   │   └── story.md             # Story → Feature PR template
 │   └── issue-templates/
 │       ├── feature.md           # Feature issue template
 │       ├── story.md             # Story issue template
@@ -346,11 +414,13 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 
 ### Enforcement Mechanisms
 
-1. **State Machine**: Tracks workflow phase (`IDLE` → `RESEARCHING` → `PLANNING` → `PENDING_APPROVAL` → `ORGANIZING` → `COMPLETE`)
-2. **User Gates**: Hard stops requiring explicit user confirmation before phase transitions
-3. **Pre-granted Permissions**: Allows specific bash commands (gh issue create, gh issue list) without asking
+1. **State Machine**: 
+   - Planning: `IDLE` → `RESEARCHING` → `PLANNING` → `PENDING_APPROVAL` → `ORGANIZING` → `COMPLETE`
+   - Coding: `IDLE` → `FETCHING_ISSUE` → `PLANNING_FEATURE` → `PLANNING_STORIES` → `PLANNING_TASK` → `CODING` → `LINTING` → `CREATING_PR` → `COMPLETE_TASK` → `COMPLETE_ALL`
+2. **User Gates**: Hard stops requiring explicit user confirmation before phase transitions (planning only)
+3. **Pre-granted Permissions**: Allows specific bash commands (gh issue create, gh issue list, git, gh pr) without asking
 4. **Ambiguity Detection**: Prompts user when planner detects unclear requirements
-5. **Tool Filtering**: Extension blocks unauthorized tool usage (e.g., `write`/`edit` in PLANNING phase)
+5. **Tool Filtering**: Extension blocks unauthorized tool usage (e.g., `write`/`edit` in PLANNING phases)
 
 ## Anti-Patterns to Avoid
 
@@ -375,13 +445,17 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 ### Coding Workflow
 - ✅ CODER NEVER operates on main/master
 - ✅ IMPLEMENTATION PLANNER NEVER writes code
+- ✅ Feature and story plans created upfront; task plans created iteratively
+- ✅ No duplication across feat/story/task implementation plans
+- ✅ CODER loads all 3 implementation files (feat + story + task) for context
+- ✅ Three-tier branching: feat/ → story/ → task/
+- ✅ Task PRs target story branches; Story PRs target feature branches
 - ✅ Linter passes before every PR
 - ✅ No new dependencies introduced (unless stated in issue)
-- ✅ PRs always target feature branch, never main/master
-- ✅ PRs include "Fixes" link to task issue
-- ✅ Last task of story also includes "Fixes" link to story issue
+- ✅ PRs include "Fixes" link to relevant issue
 - ✅ Tasks processed in semantic versioning order
-- ✅ .tmp cleaned between tasks
+- ✅ Granular cleanup: only completed implementation files are deleted
+- ✅ Parent plan checkboxes updated when child PRs merge
 - ✅ Feature branch reviewed by user before merging to main
 
 ## References

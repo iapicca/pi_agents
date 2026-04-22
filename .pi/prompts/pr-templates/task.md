@@ -1,13 +1,10 @@
-# PR Template
+# Task PR Template
 
-Use this template when creating Pull Requests from the PR-WRITER agent.
+Use this template when creating Pull Requests for task → story merges from the PR-WRITER agent.
 
 ```markdown
 ## Related Issues
 Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{TASK_NUMBER}}
-{{#if IS_LAST_TASK}}
-Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
-{{/if}}\
 
 ## Changes
 {{LIST_OF_CHANGES}}
@@ -19,6 +16,7 @@ Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
 - [x] No new dependencies introduced (unless specified in issue)
 
 ## Reference
+- **Task:** #{{TASK_NUMBER}}
 - **Story:** #{{STORY_NUMBER}}
 - **Feature:** #{{FEATURE_NUMBER}}
 ```
@@ -28,9 +26,8 @@ Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
 ### For PR-WRITER Agent
 
 1. Replace all `{{VARIABLES}}` with actual values before creating the PR
-2. The `IS_LAST_TASK` block should only be included if this is the final task of its parent story
-3. Keep the PR body brief and focused on the specific task
-4. The "Fixes" link ensures the related issue will be closed when the feature branch is eventually merged to main
+2. Keep the PR body brief and focused on the specific task
+3. The "Fixes" link ensures the related task issue will be closed when the story branch is eventually merged
 
 ### Variable Definitions
 
@@ -41,12 +38,10 @@ Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
 - `{{VERSION}}` - Semantic version of the task (e.g., `1.1.2`)
 - `{{OWNER}}` - GitHub repository owner/organization
 - `{{REPO}}` - GitHub repository name
-- `{{IS_LAST_TASK}}` - Set to `true` only if this is the last task of the story
-- `{{LIST_OF_CHANGES}}` - A list of new/changed files with brief description(max 40 chars) of the new code
+- `{{LIST_OF_CHANGES}}` - A list of new/changed files with brief description (max 40 chars) of the new code
 
 ### Important Rules
 
 1. **Always include** the task's "Fixes" link
-2. **Conditionally include** the story's "Fixes" link only for the last task of a story
-3. **Never include** the feature's "Fixes" link (features are closed by the final story or manually)
-4. **Target branch** must always be the feature branch, never main/master
+2. **Target branch** must always be the story branch, never main/master or the feature branch
+3. Task PRs are auto-merged to the story branch
