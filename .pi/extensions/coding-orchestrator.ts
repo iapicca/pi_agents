@@ -24,6 +24,8 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 type CodingState =
   | "IDLE"
@@ -159,6 +161,15 @@ function slugify(title: string): string {
     .replace(/[^a-z0-9\s-]/g, "")
     .trim()
     .replace(/\s+/g, "-");
+}
+
+function loadPrompt(phase: string): string {
+  const path = join(".pi/prompts/extensions/coding-orchestrator", `${phase}.md`);
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return `[CODING WORKFLOW: ${phase.toUpperCase().replace(/-/g, " ")} PHASE]\n\n⚠️ Prompt file not found: ${path}`;
+  }
 }
 
 export default function codingOrchestrator(pi: ExtensionAPI): void {
@@ -699,27 +710,7 @@ Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER - FEATURE LEVEL]
-
-You are the IMPLEMENTATION PLANNER agent planning at the FEATURE level.
-
-YOUR MISSION:
-1. Read the target feature issue
-2. Analyze the codebase for overall architecture and patterns
-3. Identify all child stories
-4. Write feat-implementation-{N}.md
-
-CONSTRAINTS:
-- NEVER write implementation code
-- Focus on architecture, design decisions, and cross-story interactions
-- Story interaction descriptions MUST be 80 characters or fewer
-- Include a checklist of all stories (unchecked)
-- Do NOT include task-level or file-level details
-
-OUTPUT:
-Create .tmp/feat-implementation-{N}.md following .pi/prompts/impl-templates/feature.md
-
-When complete, call submit_feature_plan tool.`,
+          content: loadPrompt("planning-feature-phase"),
           display: false,
         },
       };
@@ -729,29 +720,7 @@ When complete, call submit_feature_plan tool.`,
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER - STORY LEVEL]
-
-You are the IMPLEMENTATION PLANNER agent planning at the STORY level.
-
-YOUR MISSION:
-1. Read the target story issue and its parent feature
-2. Read the feature implementation plan (feat-implementation-{N}.md)
-3. Analyze the codebase within the feature's architectural context
-4. Identify all child tasks
-5. Write story-implementation-{N.M}.md
-
-CONSTRAINTS:
-- NEVER write implementation code
-- Focus on story strategy and cross-task interactions
-- Task interaction descriptions MUST be 80 characters or fewer
-- Include a checklist of all tasks (unchecked)
-- Do NOT duplicate feature-level architecture - REFERENCE it
-- Do NOT include specific file/line changes
-
-OUTPUT:
-Create .tmp/story-implementation-{N.M}.md following .pi/prompts/impl-templates/story.md
-
-When complete, call submit_story_plan tool.`,
+          content: loadPrompt("planning-stories-phase"),
           display: false,
         },
       };
@@ -761,29 +730,7 @@ When complete, call submit_story_plan tool.`,
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: IMPLEMENTATION PLANNER - TASK LEVEL]
-
-You are the IMPLEMENTATION PLANNER agent planning at the TASK level.
-
-YOUR MISSION:
-1. Read the target task issue and its parent story/feature
-2. Read the story implementation plan (story-implementation-{N.M}.md)
-3. Read the feature implementation plan (feat-implementation-{N}.md)
-4. Analyze the CURRENT codebase state (post-previous-task merges)
-5. Write task-implementation-{N.M.P}.md
-
-CONSTRAINTS:
-- NEVER write implementation code
-- Use ONLY official documentation and the existing codebase
-- Identify the first-party linter command
-- Verify no new dependencies are needed
-- Be specific: name exact files, functions, and line numbers
-- Do NOT duplicate feature or story content - REFERENCE it
-
-OUTPUT:
-Create .tmp/task-implementation-{N.M.P}.md following .pi/prompts/impl-templates/task.md
-
-When complete, call submit_task_plan tool.`,
+          content: loadPrompt("planning-task-phase"),
           display: false,
         },
       };
@@ -793,27 +740,7 @@ When complete, call submit_task_plan tool.`,
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: CODER PHASE]
-
-You are the CODER agent in a strict coding workflow.
-
-YOUR MISSION:
-1. Read feat-implementation-{N}.md (architecture context)
-2. Read story-implementation-{N.M}.md (strategy context)
-3. Read task-implementation-{N.M.P}.md (specific changes)
-4. Write/edit/delete code as specified
-5. Run the first-party linter identified in the task plan
-6. Fix any linter errors before proceeding
-
-CONSTRAINTS:
-- Follow the task implementation plan exactly
-- Use feature/story plans for architectural context
-- Do not deviate from the issue requirements
-- Do not introduce new dependencies (unless stated in the issue)
-- Run linter and ensure it passes before proceeding
-- Commit changes before invoking PR-WRITER
-
-When code is complete and linter passes, call complete_coding tool.`,
+          content: loadPrompt("coding-phase"),
           display: false,
         },
       };
@@ -824,24 +751,13 @@ When code is complete and linter passes, call complete_coding tool.`,
         return {
           message: {
             customType: "coding-context",
-            content: `[CODING WORKFLOW: PR-WRITER - STORY PR PHASE]
-
-You are the PR-WRITER agent creating a STORY → FEATURE PR.
-
-YOUR MISSION:
-1. Ensure all task changes are present on the story branch
-2. Push the story branch
-3. Create a PR using .pi/prompts/pr-templates/story.md
-4. Merge the PR to the feature branch automatically
-
-PR BODY REQUIREMENTS:
-- Include "Fixes https://github.com/${workflow.repoOwner}/${workflow.repoName}/issues/<story_number>"
-- List all completed tasks in the story
-- Title format: "[N.M] Story - {title}"
-
-TARGET BRANCH: Feature branch (NEVER main/master)
-
-When PR is merged, call complete_pr tool with prType="story" and the PR URL.`,
+            content: loadPrompt("creating-pr-story-phase").replace(
+              /\{OWNER\}/g,
+              workflow.repoOwner
+            ).replace(
+              /\{REPO\}/g,
+              workflow.repoName
+            ),
             display: false,
           },
         };
@@ -850,25 +766,13 @@ When PR is merged, call complete_pr tool with prType="story" and the PR URL.`,
       return {
         message: {
           customType: "coding-context",
-          content: `[CODING WORKFLOW: PR-WRITER - TASK PR PHASE]
-
-You are the PR-WRITER agent creating a TASK → STORY PR.
-
-YOUR MISSION:
-1. Commit all changes with a descriptive message
-2. Push the task branch
-3. Create a PR using .pi/prompts/pr-templates/task.md
-4. Merge the PR to the story branch automatically
-5. Check off the task in the story implementation plan
-6. Delete the task implementation file
-
-PR BODY REQUIREMENTS:
-- Include "Fixes https://github.com/${workflow.repoOwner}/${workflow.repoName}/issues/<task_number>"
-- Title format: "[N.M.P] {task_title}"
-
-TARGET BRANCH: Story branch (NEVER main/master or feature branch)
-
-When PR is merged, call complete_pr tool with prType="task" and the PR URL.`,
+          content: loadPrompt("creating-pr-task-phase").replace(
+            /\{OWNER\}/g,
+            workflow.repoOwner
+          ).replace(
+            /\{REPO\}/g,
+            workflow.repoName
+          ),
           display: false,
         },
       };

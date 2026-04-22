@@ -276,22 +276,22 @@ After reviewing `.tmp/PLAN.md`:
 
 ### Planning Workflow
 The following execute WITHOUT confirmation:
-- `gh issue create`
-- `gh issue list`
-- `gh issue view`
-- `gh api`
-- `gh repo view`
-- `git remote get-url origin`
+- `gh_issue_create`
+- `gh_issue_list`
+- `gh_issue_view`
+- `gh_api`
+- `gh_repo_view`
+- `gh_remote_url`
 
 ### Coding Workflow
 The following execute WITHOUT confirmation:
-- `gh issue view`
-- `gh issue list`
-- `gh pr create`
-- `gh pr merge`
-- `gh pr view`
-- `gh api`
-- `gh repo view`
+- `gh_issue_view`
+- `gh_issue_list`
+- `gh_pr_create`
+- `gh_pr_merge`
+- `gh_pr_view`
+- `gh_api`
+- `gh_repo_view`
 - `git checkout -b`
 - `git checkout`
 - `git branch`
@@ -320,8 +320,8 @@ All other commands require explicit user approval.
 - Must resolve ambiguities with `ask_user` tool
 
 ### ORGANIZING Phase
-- Allowed: `read`, `bash` (gh-cli commands only)
-- Pre-granted: All `gh issue *` commands
+- Allowed: `read`, `gh_issue_create`, `gh_issue_list`, `gh_issue_view`, `gh_repo_view`, `gh_api`
+- Pre-granted: All `gh_*` extension tools
 
 ### PLANNING_FEATURE Phase (Coding Workflow)
 - Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
@@ -346,8 +346,8 @@ All other commands require explicit user approval.
 - Must not introduce new dependencies (unless stated in issue)
 
 ### PR-CREATION Phase
-- Allowed: `read`, `bash` (git and gh-cli commands only)
-- Pre-granted: `git add`, `git commit`, `git push`, `gh pr create`, `gh pr merge`
+- Allowed: `read`, `bash` (git commands only), `gh_pr_create`, `gh_pr_merge`, `gh_pr_view`
+- Pre-granted: `git add`, `git commit`, `git push`, `gh_pr_create`, `gh_pr_merge`
 - Task PRs must target story branch, never main/master or feature branch
 - Story PRs must target feature branch, never main/master
 
@@ -380,7 +380,8 @@ All agent outputs follow structured templates:
 ├── AGENTS.md                    # This file - global workflow instructions
 ├── extensions/
 │   ├── planning-orchestrator.ts # Planning workflow enforcement
-│   └── coding-orchestrator.ts   # Coding workflow enforcement
+│   ├── coding-orchestrator.ts   # Coding workflow enforcement
+│   └── gh-extension.ts          # Structured GitHub CLI tools
 ├── agents/                       # Agent definitions
 │   ├── researcher.md            # Research agent (planning)
 │   ├── planner.md               # Planning agent (primary)
@@ -388,23 +389,32 @@ All agent outputs follow structured templates:
 │   ├── coder.md                 # Coding agent (primary)
 │   ├── implementation-planner.md # Implementation planning agent (3 levels)
 │   └── pr-writer.md             # PR creation agent (task + story PRs)
-├── skills/
-│   └── gh-cli/
-│       └── SKILL.md             # GitHub CLI operations
 ├── prompts/
 │   ├── pre-plan.md              # Pre-plan template
 │   ├── plan.md                  # Plan template
-│   ├── impl-templates/          # Implementation plan templates (NEW)
+│   ├── impl-templates/          # Implementation plan templates
 │   │   ├── feature.md           # Feature architecture template
 │   │   ├── story.md             # Story strategy template
 │   │   └── task.md              # Task implementation template
-│   ├── pr-templates/            # PR templates (NEW)
+│   ├── pr-templates/            # PR templates
 │   │   ├── task.md              # Task → Story PR template
 │   │   └── story.md             # Story → Feature PR template
-│   └── issue-templates/
-│       ├── feature.md           # Feature issue template
-│       ├── story.md             # Story issue template
-│       └── task.md              # Task issue template
+│   ├── issue-templates/         # Issue templates
+│   │   ├── feature.md           # Feature issue template
+│   │   ├── story.md             # Story issue template
+│   │   └── task.md              # Task issue template
+│   └── extensions/              # Orchestrator phase prompt files
+│       ├── planning-orchestrator/
+│       │   ├── researcher-phase.md
+│       │   ├── planner-phase.md
+│       │   └── organizer-phase.md
+│       └── coding-orchestrator/
+│           ├── planning-feature-phase.md
+│           ├── planning-stories-phase.md
+│           ├── planning-task-phase.md
+│           ├── coding-phase.md
+│           ├── creating-pr-task-phase.md
+│           └── creating-pr-story-phase.md
 └── settings.json                # Configuration
 ```
 

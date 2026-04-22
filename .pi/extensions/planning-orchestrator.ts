@@ -7,13 +7,15 @@
  * Features:
  * - State machine tracking workflow phases
  * - Hard user approval gates between phases
- * - Pre-granted permissions for gh-cli commands
+ * - Pre-granted permissions for gh-extension tools
  * - Ambiguity detection with user prompts
  * - Tool filtering to prevent unauthorized operations
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 type WorkflowState =
   | "IDLE"
@@ -61,7 +63,12 @@ const BLOCKED_COMMANDS = [
 
 // Read-only tools allowed during planning phases
 const READONLY_TOOLS = ["read", "grep", "find", "ls", "bash", "subagent"];
-const FULL_TOOLS = ["read", "grep", "find", "ls", "bash", "subagent", "write", "edit"];
+const FULL_TOOLS = [
+  "read", "grep", "find", "ls", "bash", "subagent", "write", "edit",
+  "gh_issue_create", "gh_issue_list", "gh_issue_view",
+  "gh_pr_create", "gh_pr_merge", "gh_pr_view",
+  "gh_repo_view", "gh_api", "gh_remote_url",
+];
 
 function isPreGrantedCommand(command: string): boolean {
   return PRE_GRANTED_COMMANDS.some((pattern) => pattern.test(command));
@@ -81,6 +88,15 @@ function getStateDisplay(state: WorkflowState): string {
     COMPLETE: "✅ Complete - Issues created",
   };
   return displays[state];
+}
+
+function loadPrompt(phase: string): string {
+  const path = join(".pi/prompts/extensions/planning-orchestrator", `${phase}.md`);
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return `[PLANNING WORKFLOW: ${phase.toUpperCase().replace(/-/g, " ")} PHASE]\n\n⚠️ Prompt file not found: ${path}`;
+  }
 }
 
 export default function planningOrchestrator(pi: ExtensionAPI): void {
@@ -498,30 +514,7 @@ Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
       return {
         message: {
           customType: "planning-context",
-          content: `[PLANNING WORKFLOW: RESEARCHER PHASE]
-
-You are the RESEARCHER agent in a strict planning workflow.
-
-YOUR MISSION:
-1. Attempt to locate OFFICIAL documentation using webfetch or known URLs. If you cannot find it, ask the user for the link
-2. Explicitly REJECT: Medium, StackOverflow, dev.to, blog posts
-3. ACCEPT ONLY: Official API docs, GitHub repos, package READMEs, documentation sites
-
-RESEARCH REQUIREMENTS:
-- Verify all API authentication requirements against official docs (NEVER assume)
-- Evaluate tech stack compatibility and potential failure points
-- Document official documentation links consulted
-
-OUTPUT:
-Create .tmp/pre-plan.md with:
-- Verified Technology Stack
-- API Authentication Requirements (with official doc verification)
-- Potential Risks and Blockers
-- Official Documentation Links Consulted
-
-When complete, call the complete_research tool to transition to PLANNING phase.
-
-⚠️ CRITICAL: Do NOT proceed to planning without rigorous documentation verification.`,
+          content: loadPrompt("researcher-phase"),
           display: false,
         },
       };
@@ -531,31 +524,7 @@ When complete, call the complete_research tool to transition to PLANNING phase.
       return {
         message: {
           customType: "planning-context",
-          content: `[PLANNING WORKFLOW: PLANNER PHASE]
-
-You are the PLANNER agent in a strict planning workflow.
-
-YOUR MISSION:
-Generate a detailed PLAN.md for implementation.
-
-STRICT CONSTRAINTS:
-1. NEVER write implementation code - planning only
-2. If requirements are ambiguous, use the ask_user tool for clarification
-3. Reference official documentation from the pre-plan (NEVER assume)
-4. Include step-by-step implementation guide
-
-OUTPUT:
-Create .tmp/PLAN.md with:
-- Project/Feature Overview
-- Step-by-Step Implementation Guide
-- API References (linking to official docs)
-- Anti-Patterns to Avoid
-- Testing Strategy
-- Rollback Procedures
-
-When complete, call the submit_plan tool to request user approval.
-
-⚠️ CRITICAL: This is a HARD STOP - you cannot proceed to ORGANIZER without explicit user approval.`,
+          content: loadPrompt("planner-phase"),
           display: false,
         },
       };
@@ -565,51 +534,7 @@ When complete, call the submit_plan tool to request user approval.
       return {
         message: {
           customType: "planning-context",
-          content: `[PLANNING WORKFLOW: ORGANIZER PHASE]
-
-You are the ORGANIZER agent in a strict planning workflow.
-
-YOUR MISSION:
-Create GitHub issues from the approved PLAN.md with semantic version numbers in titles.
-
-SEMANTIC VERSIONING (https://semver.org/):
-All issue titles MUST include version numbers:
-
-| Type | Version Level | Title Format | Example |
-|------|---------------|--------------|---------|
-| Feature | MAJOR (X.0.0) | [{N}] Feat - {title} | [1] Feat - Add OAuth authentication |
-| Story | MINOR (x.Y.0) | [{N.M}] Story - {title} | [1.5] Story - Implement GitHub OAuth login |
-| Task | PATCH (x.y.Z) | [{N.M.P}] Task - {title} | [1.5.3] Task - Create OAuth callback handler |
-
-VERSION NUMBER RULES:
-- Features: Sequential whole numbers starting from 1: [1], [2], [3], etc.
-- Stories: {feature}.{story} format: [1.1], [1.2], [2.1], etc.
-- Tasks: {feature}.{story}.{task} format: [1.1.1], [1.1.2], [1.2.1], etc.
-
-PRE-GRANTED PERMISSIONS:
-You can execute these commands WITHOUT confirmation:
-- gh issue create
-- gh issue list
-- gh api
-- gh repo view
-
-WORKFLOW:
-1. Read the approved PLAN.md from .tmp/PLAN.md
-2. Parse for features, stories, and tasks
-3. Track version counters:
-   - major = 1 (increment per feature)
-   - minor = 1 (increment per story within a feature)
-   - patch = 1 (increment per task within a story)
-4. Create hierarchical GitHub issues with VERSION NUMBERS in titles:
-   - Features = [{major}] Feat - {title}
-   - Stories = [{major}.{minor}] Story - {title} (use --parent for feature)
-   - Tasks = [{major}.{minor}.{patch}] Task - {title} (use --parent for story)
-5. Use templates from .pi/prompts/issue-templates/
-6. Substitute all template variables (TITLE, DESCRIPTION, FILES, etc.)
-
-When complete, call the complete_workflow tool with the number of issues created.
-
-✅ User has explicitly approved the plan - proceed with issue creation.`,
+          content: loadPrompt("organizer-phase"),
           display: false,
         },
       };
