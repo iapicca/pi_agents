@@ -3,17 +3,14 @@
 Use this template when creating Pull Requests from the PR-WRITER agent.
 
 ```markdown
-## Summary
-{{TASK_TITLE}}
-
-## Changes
-- Implemented changes for task #{{TASK_NUMBER}}
-
 ## Related Issues
 Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{TASK_NUMBER}}
 {{#if IS_LAST_TASK}}
 Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
-{{/if}}
+{{/if}}\
+
+## Changes
+{{LIST_OF_CHANGES}}
 
 ## Checklist
 - [x] Code follows project style guidelines
@@ -22,7 +19,6 @@ Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
 - [x] No new dependencies introduced (unless specified in issue)
 
 ## Reference
-- **Task:** [{{VERSION}}] {{TASK_TITLE}}
 - **Story:** #{{STORY_NUMBER}}
 - **Feature:** #{{FEATURE_NUMBER}}
 ```
@@ -46,6 +42,7 @@ Fixes https://github.com/{{OWNER}}/{{REPO}}/issues/{{STORY_NUMBER}}
 - `{{OWNER}}` - GitHub repository owner/organization
 - `{{REPO}}` - GitHub repository name
 - `{{IS_LAST_TASK}}` - Set to `true` only if this is the last task of the story
+- `{{LIST_OF_CHANGES}}` - A list of new/changed files with brief description(max 40 chars) of the new code
 
 ### Important Rules
 
