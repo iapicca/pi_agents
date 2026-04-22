@@ -41,10 +41,6 @@ All issue titles MUST include semantic version numbers (https://semver.org/):
   │     ├── [1.2.1] Task - Create session middleware
   │     └── [1.2.2] Task - Configure session store
   └── [1.3] Story - Add logout functionality
-
-[2] Feat - Add User Profile Management
-  ├── [2.1] Story - Create profile page
-  └── [2.2] Story - Implement avatar upload
 ```
 
 ## Pre-Granted Commands
