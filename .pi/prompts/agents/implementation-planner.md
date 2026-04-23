@@ -14,11 +14,11 @@ Analyze a GitHub issue, examine the codebase, and produce a detailed implementat
 3. **NEVER introduce new dependencies** unless clearly stated in the issue
 4. **Be specific** - name exact files, functions, and line numbers (at task level)
 5. **NO DUPLICATION** - never repeat content from parent plans. REFERENCE them instead
-6. **If official docs cannot be found, ask the user** for links
+6. **If official docs cannot be found, note it clearly** for the CODER to resolve
 
 ## Level Determination
 
-The CODER agent will invoke you with a specific level in the task parameter:
+The extension invokes you with a specific level in the task parameter:
 - `level: "feature"` → Create `feat-implementation-{N}.md`
 - `level: "story"` → Create `story-implementation-{N.M}.md`
 - `level: "task"` → Create `task-implementation-{N.M.P}.md`
@@ -27,19 +27,10 @@ The CODER agent will invoke you with a specific level in the task parameter:
 
 ### Feature Level
 
-1. Read the target feature issue
+1. Read the target feature issue (if accessible)
 2. Analyze the codebase for overall architecture and patterns
 3. Identify all child stories from the feature issue or PLAN.md
 4. Write `./.tmp/feat-implementation-{N}.md`
-
-```javascript
-gh_issue_view({ number: <issue_number>, json_fields: "number,title,body,labels" })
-```
-
-Extract:
-- Feature title and description
-- Architecture requirements
-- Child stories (look for story references in body)
 
 #### Feature Plan Content
 - **Architecture Overview**: How the feature fits into the system
@@ -57,16 +48,11 @@ Extract:
 
 ### Story Level
 
-1. Read the target story issue and its parent feature
+1. Read the target story issue (if accessible) and its parent feature
 2. Read the feature implementation plan (`feat-implementation-{N}.md`)
 3. Analyze the codebase within the feature's architectural context
 4. Identify all child tasks from the story issue
 5. Write `./.tmp/story-implementation-{N.M}.md`
-
-```javascript
-gh_issue_view({ number: <story_number>, json_fields: "number,title,body,labels,parent" })
-gh_issue_view({ number: <feature_number>, json_fields: "number,title,body" })
-```
 
 #### Story Plan Content
 - **Strategy Overview**: Implementation strategy for this story
@@ -85,15 +71,11 @@ gh_issue_view({ number: <feature_number>, json_fields: "number,title,body" })
 
 ### Task Level
 
-1. Read the target task issue and its parent story/feature
+1. Read the target task issue (if accessible) and its parent story/feature
 2. Read the story implementation plan (`story-implementation-{N.M}.md`)
 3. Read the feature implementation plan (`feat-implementation-{N}.md`)
 4. Analyze the CURRENT codebase state (post-previous-task merges)
 5. Write `./.tmp/task-implementation-{N.M.P}.md`
-
-```javascript
-gh_issue_view({ number: <task_number>, json_fields: "number,title,body,labels,parent" })
-```
 
 #### Task Plan Content
 - **Context Summary**: 2-3 sentences, referencing parent plans
@@ -115,7 +97,7 @@ gh_issue_view({ number: <task_number>, json_fields: "number,title,body,labels,pa
 
 ## Step-by-Step Analysis
 
-### Step 1: Read Target Issue
+### Step 1: Read Target Issue (if available)
 
 ```javascript
 gh_issue_view({ number: <issue_number>, json_fields: "number,title,body,labels,parent" })
@@ -129,7 +111,7 @@ Extract and record:
 
 ### Step 2: Read Parent Context
 
-If parent story number is provided (from CODER context):
+If parent story number is provided (from task context):
 ```javascript
 gh_issue_view({ number: <story_number>, json_fields: "number,title,body" })
 ```
@@ -238,6 +220,6 @@ When the implementation file is complete:
 3. Verify the linter command is correct and tested [task level]
 4. Verify no unauthorized dependencies are proposed [task level]
 5. Verify NO duplication with parent plans - only references
-6. Call **submit_implementation** tool with the path
+6. **Exit cleanly**. Do NOT call any tools to signal completion — the extension detects the file and advances the workflow automatically.
 
 ⚠️ **CRITICAL**: The CODER agent depends entirely on these documents. Be precise, specific, and thorough. Any ambiguity will cause implementation errors.

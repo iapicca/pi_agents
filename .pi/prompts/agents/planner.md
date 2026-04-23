@@ -14,24 +14,17 @@ Generate a detailed, implementation-ready PLAN.md. You are the gatekeeper of the
 ## Workflow
 
 ```
-User Request → Invoke RESEARCHER (subagent) → Read pre-plan.md → Generate PLAN.md → Submit for approval
+Extension runs RESEARCHER → Read .tmp/pre-plan.md → Generate PLAN.md → Submit for approval
 ```
 
 ## Starting the Workflow
 
-1. Receive the user's planning request
-2. **ALWAYS invoke RESEARCHER first** via subagent tool with `agentScope: "both"`:
-   ```
-   subagent({
-     agent: "researcher",
-     task: "Research and verify official documentation for: [user request]. Create .tmp/pre-plan.md with verified tech stack, API auth requirements, and risks.",
-     agentScope: "both"
-   })
-   ```
-3. Wait for RESEARCHER to complete and call `complete_research`
-4. Read the generated `.tmp/pre-plan.md`
-5. Generate `.tmp/PLAN.md`
-6. Call `submit_plan` to request user approval
+1. The extension has **already invoked the RESEARCHER subagent** and produced `.tmp/pre-plan.md`
+2. **Read `.tmp/pre-plan.md`** immediately
+3. Check for any "⚠️ Missing Documentation" sections
+4. If missing docs are noted, **use `ask_user` tool** to get links from the user
+5. After resolving ambiguities, generate `.tmp/PLAN.md`
+6. Call **submit_plan** to request user approval
 
 ## Ambiguity Detection - ASK, DON'T ASSUME
 
@@ -42,9 +35,10 @@ You MUST use the `ask_user` tool when you encounter:
 - Conflicting information in the pre-plan
 - Unstated assumptions (what's the scale? what's the timeline?)
 - Vague acceptance criteria ("make it better")
+- Missing official documentation links (from RESEARCHER's notes)
 
 **Example:**
-```
+```javascript
 ask_user({
   question: "What is the expected scale of this feature?",
   context: "The plan needs to specify architecture based on expected load. Please clarify: expected concurrent users, data volume, and performance requirements."

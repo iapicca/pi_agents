@@ -1,25 +1,18 @@
 /**
- * Coding Orchestrator Extension
+ * Coding Orchestrator Extension — Strategy C (Hybrid Enforcement)
  *
- * Enforces a strict coding workflow for implementing GitHub issues:
- * 1. Parse issue URL and determine type (feature/story/task)
- * 2. Create feature branch: feat/<number>-<slug>
- * 3. Create story branches: story/<number>.<minor>-<slug>
- * 4. Pre-planning phase: feature plan + story plans (upfront)
- * 5. For each task (in semantic versioning order):
- *    a. Create task branch from story branch
- *    b. IMPLEMENTATION PLANNER analyzes codebase and writes task-implementation-{N.M.P}.md
- *    c. CODER reads all 3 implementation files and writes/edits code
- *    d. Run first-party linter
- *    e. PR-WRITER commits, pushes, creates task PR to story branch, merges
- *    f. Check off task in story plan, delete task implementation file
- *    g. If last task of story: PR-WRITER creates story PR to feature branch, merges
- *    h. Check off story in feature plan, delete story implementation file
+ * Enforces a strict coding workflow with iterative task execution:
+ * IDLE → FETCHING_ISSUE → PLANNING_FEATURE → PLANNING_STORIES → PLANNING_TASK →
+ * CODING → CREATING_PR → COMPLETE_TASK → (loop) → COMPLETE_ALL
  *
- * Features:
- * - State machine tracking coding phases
- * - Tool filtering with pre-granted git/gh/linter permissions
- * - Phase-specific context injection for subagents
+ * Key changes from previous version:
+ * - Command-driven entry point (/code)
+ * - Extension auto-spawns IMPLEMENTATION PLANNER and PR-WRITER
+ * - Extension handles branch creation and issue fetching
+ * - pi.setActiveTools() mechanically restricts tools per phase
+ * - Path-based blocking: write/edit outside .tmp/ forbidden during planning phases
+ * - Git main/master protection during CODING
+ * - Fully sequential — no parallelism
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -34,7 +27,6 @@ type CodingState =
   | "PLANNING_STORIES"
   | "PLANNING_TASK"
   | "CODING"
-  | "LINTING"
   | "CREATING_PR"
   | "COMPLETE_TASK"
   | "COMPLETE_ALL";
@@ -73,15 +65,28 @@ interface CodingWorkflowData {
   startTime: number;
 }
 
-// Pre-granted bash commands for coding workflow (no confirmation required)
+// ── Tool sets for setActiveTools() ───────────────────────────────────────────
+
+const READONLY_TOOLS = ["read", "grep", "find", "ls", "bash", "webfetch"];
+
+const PLANNING_TOOLS = ["read", "grep", "find", "ls", "bash", "write", "edit", "webfetch"];
+
+const CODING_TOOLS = ["read", "grep", "find", "ls", "bash", "write", "edit", "subagent"];
+
+const PR_TOOLS = ["read", "bash", "gh_pr_create", "gh_pr_merge", "gh_pr_view"];
+
+const FULL_TOOLS = [
+  "read", "grep", "find", "ls", "bash", "subagent", "write", "edit",
+  "gh_issue_create", "gh_issue_list", "gh_issue_view",
+  "gh_pr_create", "gh_pr_merge", "gh_pr_view",
+  "gh_repo_view", "gh_api", "gh_remote_url",
+  "complete_coding", "webfetch",
+];
+
+// ── Pre-granted bash commands (no confirmation) ──────────────────────────────
+// NOTE: No raw `gh` CLI commands here. Agents MUST use gh-extension tools.
+
 const PRE_GRANTED_COMMANDS = [
-  /^gh issue view\b/,
-  /^gh issue list\b/,
-  /^gh pr create\b/,
-  /^gh pr merge\b/,
-  /^gh pr view\b/,
-  /^gh api\b/,
-  /^gh repo view\b/,
   /^git checkout -b\b/,
   /^git checkout\b/,
   /^git branch\b/,
@@ -98,9 +103,9 @@ const PRE_GRANTED_COMMANDS = [
   /^git rebase\b/,
   /^mkdir -p \.tmp/,
   /^rm \.tmp\//,
-  /^ls \.tmp\//,
-  /^cat \.tmp\//,
   /^touch \.tmp\//,
+  /^cat \.tmp\//,
+  /^ls \.tmp\//,
   /^sed -i/,
   /^npm run lint\b/,
   /^npm run fix\b/,
@@ -147,7 +152,6 @@ function getStateDisplay(state: CodingState): string {
     PLANNING_STORIES: "📝 Planning story strategies",
     PLANNING_TASK: "📝 Planning task implementation",
     CODING: "💻 Writing code",
-    LINTING: "🔍 Running linter",
     CREATING_PR: "🚀 Creating PR",
     COMPLETE_TASK: "✅ Task complete",
     COMPLETE_ALL: "🎉 All tasks complete",
@@ -171,6 +175,24 @@ function loadPrompt(phase: string): string {
     return `[CODING WORKFLOW: ${phase.toUpperCase().replace(/-/g, " ")} PHASE]\n\n⚠️ Prompt file not found: ${path}`;
   }
 }
+
+function extractVersion(title: string): string {
+  const match = title.match(/\[(\d+(?:\.\d+)?(?:\.\d+)?)\]/);
+  return match ? match[1] : "0";
+}
+
+function compareVersions(a: string, b: string): number {
+  const aParts = a.split(".").map(Number);
+  const bParts = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const aNum = aParts[i] || 0;
+    const bNum = bParts[i] || 0;
+    if (aNum !== bNum) return aNum - bNum;
+  }
+  return 0;
+}
+
+// ── Main extension ───────────────────────────────────────────────────────────
 
 export default function codingOrchestrator(pi: ExtensionAPI): void {
   let workflow: CodingWorkflowData = {
@@ -198,10 +220,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
   });
 
   function updateStatus(ctx: ExtensionContext): void {
-    ctx.ui.setStatus(
-      "coding-workflow",
-      ctx.ui.theme.fg("accent", getStateDisplay(workflow.state))
-    );
+    ctx.ui.setStatus("coding-workflow", ctx.ui.theme.fg("accent", getStateDisplay(workflow.state)));
   }
 
   function persistState(): void {
@@ -223,382 +242,354 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
     });
   }
 
-  // ============ CUSTOM TOOLS ============
+  async function spawnSubagent(agent: string, task: string): Promise<any> {
+    return pi.invokeTool("subagent", { agent, task, agentScope: "both" } as any);
+  }
 
-  // Tool: code - Entry point
-  pi.registerTool({
-    name: "code",
-    label: "Code",
-    description:
-      "Start the coding workflow. Takes a GitHub issue URL, creates a feature branch, and iterates through all tasks in semantic versioning order.",
-    parameters: Type.Object({
-      issueUrl: Type.String({ description: "GitHub issue URL to implement" }),
-    }),
+  async function runBash(command: string): Promise<{ stdout: string; isError: boolean }> {
+    const result = await pi.invokeTool("bash", { command } as any);
+    return {
+      stdout: result.content?.[0]?.text || "",
+      isError: result.isError || false,
+    };
+  }
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "IDLE" && workflow.state !== "COMPLETE_ALL") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Coding workflow already in progress (state: ${workflow.state}). Complete current workflow or use /reset-code to start fresh.`,
-            },
-          ],
-          isError: true,
-        };
+  async function ensureBranch(branch: string, base: string): Promise<void> {
+    const create = await runBash(`git checkout -b "${branch}" "${base}"`);
+    if (create.isError) {
+      await runBash(`git checkout "${branch}"`);
+    }
+  }
+
+  function haltAndReset(ctx: ExtensionContext, reason: string): void {
+    workflow.state = "IDLE";
+    pi.setActiveTools(FULL_TOOLS);
+    updateStatus(ctx);
+    persistState();
+    ctx.ui.notify("❌ Coding workflow halted: " + reason, "error");
+  }
+
+  // Auto-advance through extension-driven states.
+  // Returns when reaching CODING (main session takes over) or COMPLETE_ALL.
+  async function advanceCodingWorkflow(ctx: ExtensionContext): Promise<void> {
+    while (true) {
+      switch (workflow.state) {
+        case "FETCHING_ISSUE": {
+          pi.setActiveTools(READONLY_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify("📥 Fetching issue details...", "info");
+
+          const match = workflow.issueUrl.match(/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)/);
+          if (!match) {
+            haltAndReset(ctx, `Invalid issue URL: "${workflow.issueUrl}"`);
+            return;
+          }
+
+          const [, owner, repo, numberStr] = match;
+          workflow.repoOwner = owner;
+          workflow.repoName = repo;
+          workflow.issueNumber = parseInt(numberStr, 10);
+
+          const issueResult = await pi.invokeTool("gh_issue_view", {
+            number: workflow.issueNumber,
+            json_fields: "number,title,body,labels,state,parent",
+          } as any);
+
+          if (issueResult.isError) {
+            haltAndReset(ctx, "Failed to fetch issue: " + issueResult.content?.[0]?.text);
+            return;
+          }
+
+          const issueData = issueResult.data as any;
+          const labels = (issueData.labels || []) as string[];
+
+          if (labels.includes("feature")) workflow.issueType = "feature";
+          else if (labels.includes("story")) workflow.issueType = "story";
+          else if (labels.includes("task")) workflow.issueType = "task";
+          else workflow.issueType = "unknown";
+
+          // Build stories and tasks based on issue type
+          if (workflow.issueType === "feature") {
+            const storiesResult = await pi.invokeTool("gh_issue_list", {
+              label: "story",
+              state: "open",
+              json_fields: "number,title,body,labels,state,parent",
+              limit: 100,
+            } as any);
+
+            const allStories = (storiesResult.data || []) as any[];
+            const featureStories = allStories.filter((s: any) => s.parent?.number === workflow.issueNumber);
+
+            const tasksResult = await pi.invokeTool("gh_issue_list", {
+              label: "task",
+              state: "open",
+              json_fields: "number,title,body,labels,state,parent",
+              limit: 100,
+            } as any);
+
+            const allTasks = (tasksResult.data || []) as any[];
+
+            workflow.stories = [];
+            workflow.tasks = [];
+
+            for (const story of featureStories) {
+              const storyVersion = extractVersion(story.title);
+              const storyTasks = allTasks
+                .filter((t: any) => t.parent?.number === story.number)
+                .map((t: any) => ({
+                  number: t.number,
+                  title: t.title,
+                  version: extractVersion(t.title),
+                  storyVersion,
+                }));
+
+              storyTasks.sort((a: any, b: any) => compareVersions(a.version, b.version));
+
+              workflow.stories.push({
+                number: story.number,
+                title: story.title,
+                version: storyVersion,
+                tasks: storyTasks,
+              });
+
+              workflow.tasks.push(...storyTasks);
+            }
+
+            workflow.tasks.sort((a, b) => compareVersions(a.version, b.version));
+
+          } else if (workflow.issueType === "story") {
+            const tasksResult = await pi.invokeTool("gh_issue_list", {
+              label: "task",
+              state: "open",
+              json_fields: "number,title,body,labels,state,parent",
+              limit: 100,
+            } as any);
+
+            const allTasks = (tasksResult.data || []) as any[];
+            const storyVersion = extractVersion(issueData.title);
+            const storyTasks = allTasks
+              .filter((t: any) => t.parent?.number === workflow.issueNumber)
+              .map((t: any) => ({
+                number: t.number,
+                title: t.title,
+                version: extractVersion(t.title),
+                storyVersion,
+              }));
+
+            storyTasks.sort((a: any, b: any) => compareVersions(a.version, b.version));
+
+            workflow.stories = [{
+              number: workflow.issueNumber,
+              title: issueData.title,
+              version: storyVersion,
+              tasks: storyTasks,
+            }];
+
+            workflow.tasks = [...storyTasks];
+
+          } else if (workflow.issueType === "task") {
+            workflow.stories = [];
+            workflow.tasks = [{
+              number: workflow.issueNumber,
+              title: issueData.title,
+              version: extractVersion(issueData.title),
+              storyVersion: "",
+            }];
+          }
+
+          workflow.totalStories = workflow.stories.length;
+          workflow.totalTasks = workflow.tasks.length;
+          workflow.currentStoryIndex = 0;
+          workflow.currentTaskIndex = 0;
+
+          // Create branches
+          const defaultBranchResult = await runBash(
+            'git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed \'s@^refs/remotes/origin/@@\''
+          );
+          const defaultBranch = defaultBranchResult.stdout.trim() || "main";
+
+          const slug = slugify(issueData.title || "feature");
+          workflow.featureBranch = `feat/${workflow.issueNumber}-${slug}`;
+
+          await ensureBranch(workflow.featureBranch, defaultBranch);
+
+          for (const story of workflow.stories) {
+            const storySlug = slugify(story.title);
+            const storyBranch = `story/${workflow.issueNumber}.${story.version}-${storySlug}`;
+            await ensureBranch(storyBranch, workflow.featureBranch);
+          }
+
+          await runBash(`git checkout "${workflow.featureBranch}"`);
+
+          workflow.state = "PLANNING_FEATURE";
+          persistState();
+          continue;
+        }
+
+        case "PLANNING_FEATURE": {
+          pi.setActiveTools(PLANNING_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify("📝 Planning feature architecture...", "info");
+
+          const result = await spawnSubagent(
+            "implementation-planner",
+            `Plan implementation for feature #${workflow.issueNumber}: "${workflow.featureBranch}".\n` +
+            `Level: feature\n` +
+            `Feature branch: ${workflow.featureBranch}\n` +
+            `Write .tmp/feat-implementation-${workflow.issueNumber}.md\n\n` +
+            `Focus on high-level architecture, cross-story interactions, and a story checklist. ` +
+            `Do NOT include task-level details or specific file/line changes.`
+          );
+
+          if (result.isError) {
+            haltAndReset(ctx, "Feature planning failed: " + result.content?.[0]?.text);
+            return;
+          }
+
+          workflow.state = "PLANNING_STORIES";
+          persistState();
+          continue;
+        }
+
+        case "PLANNING_STORIES": {
+          pi.setActiveTools(PLANNING_TOOLS);
+          updateStatus(ctx);
+
+          for (const story of workflow.stories) {
+            ctx.ui.notify(`📝 Planning story ${story.version}...`, "info");
+            const result = await spawnSubagent(
+              "implementation-planner",
+              `Plan implementation for story #${story.number}: "${story.title}".\n` +
+              `Level: story\n` +
+              `Feature branch: ${workflow.featureBranch}\n` +
+              `Write .tmp/story-implementation-${story.version}.md\n\n` +
+              `Focus on strategy, cross-task interactions, and a task checklist. ` +
+              `Do NOT duplicate feature architecture — reference .tmp/feat-implementation-${workflow.issueNumber}.md. ` +
+              `Do NOT include specific file/line changes.`
+            );
+
+            if (result.isError) {
+              haltAndReset(ctx, `Story ${story.version} planning failed: ` + result.content?.[0]?.text);
+              return;
+            }
+          }
+
+          workflow.state = "PLANNING_TASK";
+          workflow.currentTaskIndex = 0;
+          persistState();
+          continue;
+        }
+
+        case "PLANNING_TASK": {
+          const task = workflow.tasks[workflow.currentTaskIndex];
+          pi.setActiveTools(PLANNING_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify(`📝 Planning task ${task.version}...`, "info");
+
+          const result = await spawnSubagent(
+            "implementation-planner",
+            `Plan implementation for task #${task.number}: "${task.title}".\n` +
+            `Level: task\n` +
+            `Feature branch: ${workflow.featureBranch}\n` +
+            `Write .tmp/task-implementation-${task.version}.md\n\n` +
+            `Focus on specific file/line changes. Be exact about files, functions, and line numbers. ` +
+            `Do NOT duplicate feature/story content — reference:\n` +
+            `- .tmp/feat-implementation-${workflow.issueNumber}.md\n` +
+            `- .tmp/story-implementation-${task.storyVersion}.md\n\n` +
+            `Include linter command, dependencies check, and testing notes.`
+          );
+
+          if (result.isError) {
+            haltAndReset(ctx, `Task ${task.version} planning failed: ` + result.content?.[0]?.text);
+            return;
+          }
+
+          workflow.state = "CODING";
+          persistState();
+          continue;
+        }
+
+        case "CODING": {
+          const task = workflow.tasks[workflow.currentTaskIndex];
+          pi.setActiveTools(CODING_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify(
+            `💻 CODING: Task ${task.version} — Load all 3 impl files, write code, run linter, then call complete_coding`,
+            "info"
+          );
+          return; // main session takes over
+        }
+
+        case "CREATING_PR": {
+          pi.setActiveTools(PR_TOOLS);
+          updateStatus(ctx);
+          const prType = workflow.prType;
+          ctx.ui.notify(`🚀 Creating ${prType} PR...`, "info");
+
+          const result = await spawnSubagent(
+            "pr-writer",
+            `Create and merge ${prType} PR.\n` +
+            `Repository: ${workflow.repoOwner}/${workflow.repoName}\n` +
+            `Type: ${prType}\n` +
+            (prType === "task"
+              ? `Task branch → Story branch`
+              : `Story branch → Feature branch`) +
+            `\n\nUse the appropriate PR template from .pi/prompts/pr-templates/. ` +
+            `Include "Fixes" links. Merge automatically.`
+          );
+
+          if (result.isError) {
+            haltAndReset(ctx, `${prType} PR creation failed: ` + result.content?.[0]?.text);
+            return;
+          }
+
+          workflow.state = "COMPLETE_TASK";
+          persistState();
+          continue;
+        }
+
+        case "COMPLETE_TASK": {
+          workflow.currentTaskIndex++;
+
+          if (workflow.currentTaskIndex >= workflow.totalTasks) {
+            workflow.state = "COMPLETE_ALL";
+            persistState();
+            continue;
+          }
+
+          const prevTask = workflow.tasks[workflow.currentTaskIndex - 1];
+          const nextTask = workflow.tasks[workflow.currentTaskIndex];
+
+          // Crossed a story boundary?
+          if (nextTask.storyVersion !== prevTask.storyVersion) {
+            workflow.state = "CREATING_PR";
+            workflow.prType = "story";
+            persistState();
+            continue;
+          }
+
+          workflow.state = "PLANNING_TASK";
+          persistState();
+          continue;
+        }
+
+        case "COMPLETE_ALL": {
+          pi.setActiveTools(FULL_TOOLS);
+          const duration = Math.round((Date.now() - workflow.startTime) / 1000);
+          updateStatus(ctx);
+          ctx.ui.notify(
+            `🎉 Coding complete! ${workflow.totalTasks} tasks, ${workflow.totalStories} stories. ` +
+            `Duration: ${duration}s. Feature branch: ${workflow.featureBranch}`,
+            "info"
+          );
+          return;
+        }
+
+        case "IDLE":
+          return;
       }
-
-      // Parse issue URL: https://github.com/owner/repo/issues/123
-      const match = params.issueUrl.match(/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)/);
-      if (!match) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Invalid issue URL: "${params.issueUrl}". Expected format: https://github.com/owner/repo/issues/123`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const [, owner, repo, numberStr] = match;
-      const issueNumber = parseInt(numberStr, 10);
-
-      workflow = {
-        state: "FETCHING_ISSUE",
-        issueUrl: params.issueUrl,
-        issueNumber,
-        issueType: "unknown",
-        featureBranch: "",
-        currentStoryIndex: 0,
-        currentTaskIndex: 0,
-        totalStories: 0,
-        totalTasks: 0,
-        stories: [],
-        tasks: [],
-        repoOwner: owner,
-        repoName: repo,
-        prType: "none",
-        startTime: Date.now(),
-      };
-
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `🎯 Starting coding workflow for issue #${issueNumber}\n\n🔗 ${params.issueUrl}\n\nWorkflow:\n1. Fetch issue details (type: feature/story/task)\n2. Create feature branch\n3. Pre-planning: feature architecture + story strategies\n4. For each task (in semver order):\n   a. IMPLEMENTATION PLANNER → task-implementation-{N.M.P}.md\n   b. CODER → write/edit code (loads all 3 impl files)\n   c. Linter → validate\n   d. PR-WRITER → push, create task PR, merge to story branch\n   e. If last task of story → story PR, merge to feature branch\n5. Clean up\n\n📥 Fetching issue details...`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool: submit_feature_plan - Transition from feature planning to story planning
-  pi.registerTool({
-    name: "submit_feature_plan",
-    label: "Submit Feature Plan",
-    description: "Called by IMPLEMENTATION PLANNER to submit the completed feature implementation plan.",
-    parameters: Type.Object({
-      planPath: Type.String({ default: ".tmp/feat-implementation-{N}.md" }),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "PLANNING_FEATURE") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot submit feature plan: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      workflow.state = "PLANNING_STORIES";
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Feature plan submitted!\n\n📄 Location: ${params.planPath}\n\n📝 Phase: Planning story strategies...`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool: submit_story_plan - Transition from story planning to next story or task planning
-  pi.registerTool({
-    name: "submit_story_plan",
-    label: "Submit Story Plan",
-    description: "Called by IMPLEMENTATION PLANNER to submit a completed story implementation plan.",
-    parameters: Type.Object({
-      planPath: Type.String({ default: ".tmp/story-implementation-{N.M}.md" }),
-      isLastStory: Type.Boolean({ default: false, description: "Whether this is the last story to plan" }),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "PLANNING_STORIES") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot submit story plan: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      if (params.isLastStory) {
-        workflow.state = "PLANNING_TASK";
-        updateStatus(ctx);
-        persistState();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `✅ All story plans submitted!\n\n📄 Last story plan: ${params.planPath}\n\n📝 Phase: Planning first task implementation...`,
-            },
-          ],
-        };
-      }
-
-      // More stories to plan - stay in PLANNING_STORIES
-      workflow.currentStoryIndex++;
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Story plan submitted!\n\n📄 Location: ${params.planPath}\n\n📝 Phase: Planning next story strategy...`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool: submit_task_plan - Transition from task planner to coder
-  pi.registerTool({
-    name: "submit_task_plan",
-    label: "Submit Task Plan",
-    description: "Called by IMPLEMENTATION PLANNER to submit the completed task implementation plan.",
-    parameters: Type.Object({
-      planPath: Type.String({ default: ".tmp/task-implementation-{N.M.P}.md" }),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "PLANNING_TASK") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot submit task plan: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      workflow.state = "CODING";
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Task plan submitted!\n\n📄 Location: ${params.planPath}\n\n💻 Phase: CODER - Writing code based on implementation plan (loading feat + story + task plans)...`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool: complete_coding - Transition from coding to PR creation
-  pi.registerTool({
-    name: "complete_coding",
-    label: "Complete Coding",
-    description: "Called by CODER after writing code and running linter successfully.",
-    parameters: Type.Object({}),
-
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "CODING" && workflow.state !== "LINTING") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot complete coding: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      workflow.state = "CREATING_PR";
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Coding complete and linter passed!\n\n🚀 Phase: PR-WRITER - Creating PR and merging...`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool: complete_pr - After PR is merged
-  pi.registerTool({
-    name: "complete_pr",
-    label: "Complete PR",
-    description: "Called by PR-WRITER after PR is created and merged.",
-    parameters: Type.Object({
-      prUrl: Type.String({ description: "URL of the created and merged PR" }),
-      prType: Type.String({ description: "Type of PR: task or story", default: "task" }),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "CREATING_PR") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot complete PR: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      if (params.prType === "story") {
-        // Story PR merged - story is complete
-        workflow.state = "COMPLETE_TASK";
-        workflow.prType = "none";
-        updateStatus(ctx);
-        persistState();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `✅ Story PR merged!\n\n🔗 ${params.prUrl}\n\n🧹 Story branch merged to feature branch. Preparing for next task...`,
-            },
-          ],
-        };
-      }
-
-      // Task PR merged
-      workflow.state = "COMPLETE_TASK";
-      workflow.prType = "none";
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Task PR merged!\n\n🔗 ${params.prUrl}\n\n🧹 Task implementation file cleaned. Preparing for next task...`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool: next_task - Transition to next task, story PR, or complete
-  pi.registerTool({
-    name: "next_task",
-    label: "Next Task",
-    description:
-      "Transition to the next task in the iteration, or trigger story PR creation, or complete. Called by CODER agent after a task is fully processed.",
-    parameters: Type.Object({
-      taskCompleted: Type.Boolean({ description: "Whether the current task was completed successfully" }),
-      isLastTaskOfStory: Type.Boolean({ description: "Whether this was the last task of the current story", default: false }),
-      prUrl: Type.Optional(Type.String({ description: "URL of the created task PR" })),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!params.taskCompleted) {
-        workflow.state = "IDLE";
-        updateStatus(ctx);
-        persistState();
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Task failed. Workflow halted. Fix the issue and restart with /code <issue-url>.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      workflow.currentTaskIndex++;
-
-      // Check if all tasks are complete
-      if (workflow.currentTaskIndex >= workflow.totalTasks) {
-        workflow.state = "COMPLETE_ALL";
-        updateStatus(ctx);
-        persistState();
-
-        const duration = Math.round((Date.now() - workflow.startTime) / 1000);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `🎉 Coding Workflow Complete!\n\n✅ Stories Completed: ${workflow.totalStories}\n✅ Tasks Completed: ${workflow.totalTasks}\n⏱️ Duration: ${duration}s\n📋 Feature Branch: \`${workflow.featureBranch}\`\n\nAll stories and tasks have been implemented and merged to the feature branch.\nReview and merge \`${workflow.featureBranch}\` to main when ready.`,
-            },
-          ],
-        };
-      }
-
-      // If last task of story, trigger story PR creation
-      if (params.isLastTaskOfStory) {
-        workflow.state = "CREATING_PR";
-        workflow.prType = "story";
-        updateStatus(ctx);
-        persistState();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `➡️ Last task of story completed!\n\n🚀 Phase: PR-WRITER - Creating story PR and merging to feature branch...`,
-            },
-          ],
-        };
-      }
-
-      // More tasks to process
-      const nextTask = workflow.tasks[workflow.currentTaskIndex];
-      workflow.state = "PLANNING_TASK";
-      workflow.prType = "none";
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `➡️ Moving to next task (${workflow.currentTaskIndex + 1}/${workflow.totalTasks})\n\nTask #${nextTask.number}: ${nextTask.title}\nVersion: ${nextTask.version}\n\n📝 Calling IMPLEMENTATION PLANNER for task-level plan...`,
-          },
-        ],
-      };
-    },
-  });
+    }
+  }
 
   // ============ COMMANDS ============
 
@@ -611,8 +602,35 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         return;
       }
 
-      const result = await pi.invokeTool("code", { issueUrl });
-      ctx.ui.notify(result.content[0].text, "info");
+      if (workflow.state !== "IDLE" && workflow.state !== "COMPLETE_ALL") {
+        ctx.ui.notify(
+          `❌ Coding workflow already in progress (state: ${workflow.state}). Use /reset-code to start fresh.`,
+          "error"
+        );
+        return;
+      }
+
+      workflow = {
+        state: "FETCHING_ISSUE",
+        issueUrl,
+        issueNumber: 0,
+        issueType: "unknown",
+        featureBranch: "",
+        currentStoryIndex: 0,
+        currentTaskIndex: 0,
+        totalStories: 0,
+        totalTasks: 0,
+        stories: [],
+        tasks: [],
+        repoOwner: "",
+        repoName: "",
+        prType: "none",
+        startTime: Date.now(),
+      };
+
+      updateStatus(ctx);
+      persistState();
+      await advanceCodingWorkflow(ctx);
     },
   });
 
@@ -636,6 +654,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
         prType: "none",
         startTime: Date.now(),
       };
+      pi.setActiveTools(FULL_TOOLS);
       updateStatus(ctx);
       persistState();
       ctx.ui.notify("Coding workflow reset to IDLE state", "info");
@@ -646,7 +665,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
     description: "Show current coding workflow status",
     handler: async (_args, ctx) => {
       const currentTask = workflow.tasks[workflow.currentTaskIndex];
-      const currentStory = workflow.stories[workflow.currentStoryIndex];
+      const currentStory = workflow.stories.find((s) => s.version === currentTask?.storyVersion);
       const status = `
 📊 Coding Workflow Status
 ${"─".repeat(40)}
@@ -654,7 +673,7 @@ State: ${workflow.state}
 PR Type: ${workflow.prType}
 Issue: #${workflow.issueNumber} (${workflow.issueType})
 Feature Branch: ${workflow.featureBranch || "(not created)"}
-Stories: ${workflow.currentStoryIndex}/${workflow.totalStories}
+Stories: ${workflow.stories.length}
 Tasks: ${workflow.currentTaskIndex}/${workflow.totalTasks}
 Current Story: ${currentStory ? `#${currentStory.number} ${currentStory.title}` : "(none)"}
 Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(none)"}
@@ -663,9 +682,79 @@ Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(
     },
   });
 
+  // ============ TOOLS (main-session only) ============
+
+  // Tool: complete_coding — called by CODER after linter passes
+  pi.registerTool({
+    name: "complete_coding",
+    label: "Complete Coding",
+    description: "Called by CODER after writing code and running linter successfully.",
+    parameters: Type.Object({}),
+
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      if (workflow.state !== "CODING") {
+        return {
+          content: [{ type: "text", text: `❌ Cannot complete coding: Workflow is in ${workflow.state} state.` }],
+          isError: true,
+        };
+      }
+
+      workflow.state = "CREATING_PR";
+      workflow.prType = "task";
+      persistState();
+
+      await advanceCodingWorkflow(ctx);
+
+      if (workflow.state === "COMPLETE_ALL") {
+        return {
+          content: [{ type: "text", text: `✅ All tasks complete! Feature branch: ${workflow.featureBranch}` }],
+        };
+      }
+
+      const nextTask = workflow.tasks[workflow.currentTaskIndex];
+      return {
+        content: [{
+          type: "text",
+          text:
+            `✅ Coding complete for previous task.\n\n` +
+            `➡️ Next task ready: ${nextTask.version} — ${nextTask.title}\n\n` +
+            `Load implementation files and continue coding.`,
+        }],
+      };
+    },
+  });
+
   // ============ EVENT HANDLERS ============
 
   pi.on("tool_call", async (event) => {
+    // Block write/edit outside .tmp/ during planning phases
+    if (["PLANNING_FEATURE", "PLANNING_STORIES", "PLANNING_TASK"].includes(workflow.state)) {
+      if (event.toolName === "write" || event.toolName === "edit") {
+        const filePath = (event.input.file_path || event.input.path || "") as string;
+        if (!filePath.startsWith(".tmp/")) {
+          return {
+            block: true,
+            reason:
+              `🚫 Only .tmp/ files may be written during planning phases.\n` +
+              `Path: "${filePath}"`,
+          };
+        }
+      }
+    }
+
+    // During CODING, block git operations on main/master
+    if (workflow.state === "CODING") {
+      if (event.toolName === "bash") {
+        const cmd = event.input.command as string;
+        if (/git\s+(checkout|merge|rebase)\s+(origin\/)?(main|master)\b/.test(cmd)) {
+          return {
+            block: true,
+            reason: `🚫 Cannot operate on main/master branch during coding workflow.`,
+          };
+        }
+      }
+    }
+
     if (event.toolName !== "bash") return undefined;
 
     const command = event.input.command as string;
@@ -673,33 +762,35 @@ Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(
     if (isBlockedCommand(command)) {
       return {
         block: true,
-        reason: `🚫 Command blocked by coding workflow: "${command}"\n\nThis command is not allowed during the coding workflow.`,
+        reason: `🚫 Command blocked by coding workflow: "${command}"`,
       };
     }
 
     if (isPreGrantedCommand(command)) {
-      return undefined; // Allow without confirmation
+      return undefined;
     }
 
-    // During coding phases, allow most bash commands (broader than planning)
-    // but still require confirmation for potentially destructive operations
-    const potentiallyDestructive = [
-      /^rm\b/,
-      /^mv\b/,
-      /^cp\b.*-r/,
-      /^(npm|yarn|pnpm) install\b/,
-      /^pip install\b/,
-      /^cargo install\b/,
-      /^go get\b/,
-    ];
+    // During planning phases, restrict bash to read-only
+    if (["PLANNING_FEATURE", "PLANNING_STORIES", "PLANNING_TASK"].includes(workflow.state)) {
+      const readOnlyPatterns = [
+        /^(cat|head|tail|less|more)\b/,
+        /^(grep|find|ls|pwd|tree)\b/,
+        /^git\s+(status|log|diff|branch|remote)\b/,
+        /^(npm|yarn|pnpm)\s+list\b/,
+        /^mkdir -p \.tmp/,
+        /^touch \.tmp\//,
+        /^cat \.tmp\//,
+        /^ls \.tmp\//,
+      ];
 
-    const isDestructive = potentiallyDestructive.some((p) => p.test(command));
-
-    if (isDestructive && workflow.state !== "IDLE" && workflow.state !== "COMPLETE_ALL") {
-      return {
-        block: true,
-        reason: `⏸️ Command requires confirmation in coding workflow: "${command}"\n\nThis command may modify the environment. Use /reset-code if you need to run it outside the workflow.`,
-      };
+      const isReadOnly = readOnlyPatterns.some((p) => p.test(command));
+      if (!isReadOnly) {
+        return {
+          block: true,
+          reason:
+            `⏸️ Only read-only commands allowed during planning phases: "${command}"`,
+        };
+      }
     }
 
     return undefined;
@@ -727,52 +818,49 @@ Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(
     }
 
     if (workflow.state === "PLANNING_TASK") {
+      const task = workflow.tasks[workflow.currentTaskIndex];
+      let content = loadPrompt("planning-task-phase");
+      content += `\n\nCURRENT TASK: ${task?.version || ""} — ${task?.title || ""}`;
       return {
         message: {
           customType: "coding-context",
-          content: loadPrompt("planning-task-phase"),
+          content,
           display: false,
         },
       };
     }
 
     if (workflow.state === "CODING") {
+      const task = workflow.tasks[workflow.currentTaskIndex];
+      let content = loadPrompt("coding-phase");
+      content +=
+        `\n\nCURRENT TASK:\n` +
+        `- Version: ${task?.version || ""}\n` +
+        `- Title: ${task?.title || ""}\n` +
+        `- Number: #${task?.number || ""}\n` +
+        `- Story: ${task?.storyVersion || ""}\n\n` +
+        `Load these implementation files:\n` +
+        `- .tmp/feat-implementation-${workflow.issueNumber}.md\n` +
+        `- .tmp/story-implementation-${task?.storyVersion || ""}.md\n` +
+        `- .tmp/task-implementation-${task?.version || ""}.md\n\n` +
+        `After coding and linting, call complete_coding.`;
       return {
         message: {
           customType: "coding-context",
-          content: loadPrompt("coding-phase"),
+          content,
           display: false,
         },
       };
     }
 
     if (workflow.state === "CREATING_PR") {
-      if (workflow.prType === "story") {
-        return {
-          message: {
-            customType: "coding-context",
-            content: loadPrompt("creating-pr-story-phase").replace(
-              /\{OWNER\}/g,
-              workflow.repoOwner
-            ).replace(
-              /\{REPO\}/g,
-              workflow.repoName
-            ),
-            display: false,
-          },
-        };
-      }
-
       return {
         message: {
           customType: "coding-context",
-          content: loadPrompt("creating-pr-task-phase").replace(
-            /\{OWNER\}/g,
-            workflow.repoOwner
-          ).replace(
-            /\{REPO\}/g,
-            workflow.repoName
-          ),
+          content:
+            `[CODING WORKFLOW: CREATING PR]\n\n` +
+            `The PR-WRITER subagent is currently creating and merging the ${workflow.prType} PR. ` +
+            `Please wait.`,
           display: false,
         },
       };
@@ -809,6 +897,26 @@ Current Task: ${currentTask ? `#${currentTask.number} ${currentTask.title}` : "(
         repoName: workflowEntry.data.repoName ?? workflow.repoName,
         prType: workflowEntry.data.prType ?? workflow.prType,
       };
+    }
+
+    // Restore tool restrictions
+    switch (workflow.state) {
+      case "FETCHING_ISSUE":
+      case "PLANNING_FEATURE":
+      case "PLANNING_STORIES":
+      case "PLANNING_TASK":
+        pi.setActiveTools(PLANNING_TOOLS);
+        break;
+      case "CODING":
+        pi.setActiveTools(CODING_TOOLS);
+        break;
+      case "CREATING_PR":
+        pi.setActiveTools(PR_TOOLS);
+        break;
+      case "COMPLETE_ALL":
+      case "IDLE":
+        pi.setActiveTools(FULL_TOOLS);
+        break;
     }
 
     updateStatus(ctx);

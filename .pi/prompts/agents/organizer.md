@@ -52,16 +52,6 @@ All issue titles MUST include the semantic version number (https://semver.org/):
         └── [2.2.1] Task - Set up file upload handler
 ```
 
-## Pre-Granted Permissions
-
-These extension tools execute WITHOUT user confirmation:
-- `gh_issue_create`
-- `gh_issue_list`
-- `gh_issue_view`
-- `gh_api`
-- `gh_repo_view`
-- `gh_remote_url`
-
 ## Execution Rules
 
 1. **ONLY run after explicit user approval** - the workflow enforces this
@@ -96,34 +86,6 @@ These extension tools execute WITHOUT user confirmation:
    - Create task issue with title format: `[{feature_major}.{story_minor}.{patch}] Task - {title}`
    - Use `--parent` pointing to story issue number
    - Increment `patch`
-7. Call **complete_workflow** with summary
-
-## Template Variables Reference
-
-### Feature Template Variables
-- `{{TITLE}}` - Feature title (without prefix)
-- `{{DESCRIPTION}}` - Feature description
-- `{{Goal 1}}`, `{{Goal 2}}` - Goals (list format)
-- `{{Criterion 1}}`, `{{Criterion 2}}`, `{{Criterion 3}}` - Success criteria
-- `{{DOC_URL}}` - Documentation links
-- `{{Additional notes...}}` - Additional context
-
-### Story Template Variables
-- `{{TITLE}}` - Story title (without prefix)
-- `{{DESCRIPTION}}` - Story description
-- `{{Criterion 1}}`, `{{Criterion 2}}`, `{{Criterion 3}}` - Acceptance criteria
-- `{{DOC_URL}}` - Documentation links
-- `{{Implementation notes...}}` - Implementation notes
-
-### Task Template Variables
-- `{{TITLE}}` - Task title (without prefix)
-- `{{DESCRIPTION}}` - Task description
-- `{{FILES}}` - Files to modify
-- `{{SIGNATURE}}` - Function/method signature
-- `{{DEPENDENCIES}}` - Dependencies
-- `{{Criterion 1}}`, `{{Criterion 2}}`, `{{Criterion 3}}` - Acceptance criteria
-- `{{DOC_URL}}` - Documentation links
-- `{{Implementation notes...}}` - Implementation notes
 
 ## Creating Issues with Version Numbers
 
@@ -190,13 +152,6 @@ Optional additional labels based on content:
 
 ## Completion
 
-When all issues are created:
+When all issues are created, **you are done**. Exit cleanly. Do NOT call any tools to signal completion — the extension detects completion and advances the workflow automatically.
 
-```
-complete_workflow({
-  issuesCreated: N,
-  summary: "Created N issues with semantic version numbers:\n\nFeatures (MAJOR):\n- [#123] [1] Feat - Feature Name\n- [#124] [2] Feat - Another Feature\n\nStories (MINOR):\n- [#125] [1.1] Story - Story under Feature 1\n- [#126] [1.2] Story - Another Story\n- [#127] [2.1] Story - Story under Feature 2\n\nTasks (PATCH):\n- [#128] [1.1.1] Task - Task under Story 1.1\n\nView all: https://github.com/{owner}/{repo}/issues"
-})
-```
-
-⚠️ **IMPORTANT**: The workflow is NOT complete until you call `complete_workflow`.
+⚠️ **IMPORTANT**: The workflow is NOT complete until all issues are created.

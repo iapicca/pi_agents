@@ -26,7 +26,7 @@ Rigorously research and verify ALL external documentation before any planning be
 ## Research Process
 
 1. **Identify Technologies**: List all frameworks, libraries, APIs, and tools mentioned in the request
-2. **Locate Official Docs**: For each technology, attempt to find official documentation. If you cannot locate it, ask the user to provide the link
+2. **Locate Official Docs**: For each technology, attempt to find official documentation. If you cannot locate it, note it clearly in the output
 3. **Document Findings**: Once you have the official docs, extract: authentication requirements, version compatibility, and potential risks
 
 ## Output Format
@@ -73,10 +73,20 @@ Create `.tmp/pre-plan.md` with this exact structure:
 
 ## When to Stop and Ask
 
-If you cannot find official documentation for a critical technology, ask the user directly for the link using the `ask_user` tool. Do NOT proceed without verified official sources.
+If you cannot find official documentation for a critical technology, **do NOT ask the user directly**. Instead, note it clearly in `.tmp/pre-plan.md` using this format:
+
+```markdown
+## ⚠️ Missing Documentation
+
+| Technology | Reason | Planner Action Required |
+|------------|--------|------------------------|
+| [Name] | Could not locate official docs | Ask user for official documentation link |
+```
+
+The PLANNER agent (main session) will read your pre-plan and use the `ask_user` tool to resolve any missing documentation before proceeding.
 
 ## Completion
 
-When `.tmp/pre-plan.md` is complete and saved, call the **complete_research** tool to transition to the PLANNING phase.
+When `.tmp/pre-plan.md` is complete and saved, **you are done**. Exit cleanly. Do NOT call any tools to signal completion — the extension detects the file and advances the workflow automatically.
 
 ⚠️ **CRITICAL**: Do NOT proceed without rigorous verification. The PLANNER depends on accurate research.

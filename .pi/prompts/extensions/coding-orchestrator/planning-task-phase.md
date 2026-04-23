@@ -20,4 +20,4 @@ CONSTRAINTS:
 OUTPUT:
 Create .tmp/task-implementation-{N.M.P}.md following .pi/prompts/impl-templates/task.md
 
-When complete, call submit_task_plan tool.
+When complete, exit cleanly. Do NOT call any tools to signal completion.

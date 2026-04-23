@@ -1,20 +1,20 @@
 /**
- * Planning Orchestrator Extension
+ * Planning Orchestrator Extension — Strategy C (Hybrid Enforcement)
  *
  * Enforces a strict three-agent planning workflow:
  * IDLE → RESEARCHING → PLANNING → PENDING_APPROVAL → ORGANIZING → COMPLETE
  *
- * Features:
- * - State machine tracking workflow phases
- * - Hard user approval gates between phases
- * - Pre-granted permissions for gh-extension tools
- * - Ambiguity detection with user prompts
- * - Tool filtering to prevent unauthorized operations
+ * Key changes from previous version:
+ * - Command-driven entry points (/plan, /approve-plan)
+ * - Extension auto-spawns RESEARCHER and ORGANIZER subagents
+ * - pi.setActiveTools() mechanically restricts tools per phase
+ * - Path-based blocking: write/edit outside .tmp/ is forbidden during planning
+ * - Only PLANNER (main session) interacts with the user
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 type WorkflowState =
@@ -33,23 +33,44 @@ interface WorkflowData {
   planApproved: boolean;
   currentPhase: string;
   startTime: number;
+  feedback?: string;
 }
 
-// Pre-granted bash commands (no confirmation required)
+// ── Tool sets for setActiveTools() ───────────────────────────────────────────
+
+const READONLY_TOOLS = ["read", "grep", "find", "ls", "bash", "webfetch"];
+
+const PLANNING_TOOLS = [
+  "read", "grep", "find", "ls", "bash", "write", "edit",
+  "ask_user", "subagent", "submit_plan", "webfetch",
+];
+
+const ORGANIZING_TOOLS = [
+  "read", "bash",
+  "gh_issue_create", "gh_issue_list", "gh_issue_view",
+  "gh_repo_view", "gh_api", "gh_remote_url",
+];
+
+const FULL_TOOLS = [
+  "read", "grep", "find", "ls", "bash", "subagent", "write", "edit",
+  "gh_issue_create", "gh_issue_list", "gh_issue_view",
+  "gh_pr_create", "gh_pr_merge", "gh_pr_view",
+  "gh_repo_view", "gh_api", "gh_remote_url",
+  "ask_user", "submit_plan", "complete_coding", "webfetch",
+];
+
+// ── Pre-granted bash commands (no confirmation) ──────────────────────────────
+// NOTE: No raw `gh` CLI commands here. Agents MUST use gh-extension tools.
+
 const PRE_GRANTED_COMMANDS = [
-  /^gh issue create/,
-  /^gh issue list/,
-  /^gh issue view/,
-  /^gh api/,
-  /^gh repo view/,
-  /^git remote get-url/,
   /^mkdir -p \.tmp/,
   /^touch \.tmp\//,
   /^cat \.tmp\//,
   /^ls \.tmp\//,
+  /^rm \.tmp\//,
 ];
 
-// Blocked commands (always require confirmation or are blocked)
+// Blocked commands (always blocked)
 const BLOCKED_COMMANDS = [
   /^rm -rf\b/,
   /^sudo\b/,
@@ -59,15 +80,6 @@ const BLOCKED_COMMANDS = [
   /^pip install\b/,
   /^cargo install\b/,
   /^go get\b/,
-];
-
-// Read-only tools allowed during planning phases
-const READONLY_TOOLS = ["read", "grep", "find", "ls", "bash", "subagent"];
-const FULL_TOOLS = [
-  "read", "grep", "find", "ls", "bash", "subagent", "write", "edit",
-  "gh_issue_create", "gh_issue_list", "gh_issue_view",
-  "gh_pr_create", "gh_pr_merge", "gh_pr_view",
-  "gh_repo_view", "gh_api", "gh_remote_url",
 ];
 
 function isPreGrantedCommand(command: string): boolean {
@@ -99,6 +111,8 @@ function loadPrompt(phase: string): string {
   }
 }
 
+// ── Main extension ───────────────────────────────────────────────────────────
+
 export default function planningOrchestrator(pi: ExtensionAPI): void {
   let workflow: WorkflowData = {
     state: "IDLE",
@@ -108,134 +122,272 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
     startTime: Date.now(),
   };
 
-  // Register flag for starting in plan mode
   pi.registerFlag("plan", {
     description: "Start in planning workflow mode",
     type: "boolean",
     default: false,
   });
 
-  // Status update helper
   function updateStatus(ctx: ExtensionContext): void {
     ctx.ui.setStatus("planning-workflow", ctx.ui.theme.fg("accent", getStateDisplay(workflow.state)));
   }
 
-  // Persist workflow state
   function persistState(): void {
     pi.appendEntry("planning-workflow", {
       state: workflow.state,
       userRequest: workflow.userRequest,
       planApproved: workflow.planApproved,
       currentPhase: workflow.currentPhase,
+      feedback: workflow.feedback,
     });
   }
 
-  // ============ CUSTOM TOOLS ============
+  async function spawnSubagent(agent: string, task: string): Promise<any> {
+    return pi.invokeTool("subagent", { agent, task, agentScope: "both" } as any);
+  }
 
-  // Tool 1: plan - Entry point to start workflow
-  pi.registerTool({
-    name: "plan",
-    label: "Plan",
-    description: "Start the planning workflow. Takes a user request and begins the RESEARCHER → PLANNER → ORGANIZER sequence.",
-    parameters: Type.Object({
-      request: Type.String({ description: "The feature, project, or task to plan" }),
-    }),
+  // Auto-advance through states that are fully extension-driven.
+  // Returns when reaching a state that requires main-session participation.
+  async function advanceWorkflow(ctx: ExtensionContext): Promise<void> {
+    while (true) {
+      switch (workflow.state) {
+        case "RESEARCHING": {
+          pi.setActiveTools(READONLY_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify("🔍 Spawning RESEARCHER subagent...", "info");
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+          const result = await spawnSubagent(
+            "researcher",
+            `Research and verify official documentation for: "${workflow.userRequest}". ` +
+            `Create .tmp/pre-plan.md with verified tech stack, API auth requirements, and risks. ` +
+            `If official docs cannot be found, note it clearly in the file for the PLANNER to resolve.`
+          );
+
+          if (result.isError) {
+            workflow.state = "IDLE";
+            pi.setActiveTools(FULL_TOOLS);
+            updateStatus(ctx);
+            persistState();
+            ctx.ui.notify("❌ Research failed: " + result.content?.[0]?.text, "error");
+            return;
+          }
+
+          workflow.state = "PLANNING";
+          workflow.currentPhase = "PLANNING";
+          persistState();
+          continue;
+        }
+
+        case "PLANNING": {
+          pi.setActiveTools(PLANNING_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify(
+            "📝 PLANNING phase: Read .tmp/pre-plan.md, ask clarifying questions if needed, write .tmp/PLAN.md, then call submit_plan.",
+            "info"
+          );
+          return; // main session takes over
+        }
+
+        case "ORGANIZING": {
+          pi.setActiveTools(ORGANIZING_TOOLS);
+          updateStatus(ctx);
+          ctx.ui.notify("📋 Spawning ORGANIZER subagent...", "info");
+
+          const result = await spawnSubagent(
+            "organizer",
+            `Create GitHub issues from the approved plan in .tmp/PLAN.md. ` +
+            `Use semantic versioning in titles (e.g., [1] Feat, [1.1] Story, [1.1.1] Task).`
+          );
+
+          if (result.isError) {
+            workflow.state = "IDLE";
+            pi.setActiveTools(FULL_TOOLS);
+            updateStatus(ctx);
+            persistState();
+            ctx.ui.notify("❌ Organizer failed: " + result.content?.[0]?.text, "error");
+            return;
+          }
+
+          workflow.state = "COMPLETE";
+          workflow.currentPhase = "COMPLETE";
+          persistState();
+          continue;
+        }
+
+        case "COMPLETE": {
+          pi.setActiveTools(FULL_TOOLS);
+          const duration = Math.round((Date.now() - workflow.startTime) / 1000);
+          updateStatus(ctx);
+          ctx.ui.notify(`✅ Planning complete! Duration: ${duration}s`, "info");
+          return;
+        }
+
+        case "IDLE":
+        case "PENDING_APPROVAL":
+          return;
+      }
+    }
+  }
+
+  // ============ COMMANDS ============
+
+  pi.registerCommand("plan", {
+    description: "Start the planning workflow for a feature or task",
+    handler: async (args, ctx) => {
+      const request = args.trim();
+      if (!request) {
+        ctx.ui.notify('Usage: /plan "<feature description>"', "error");
+        return;
+      }
+
       if (workflow.state !== "IDLE" && workflow.state !== "COMPLETE") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Workflow already in progress (state: ${workflow.state}). Complete current workflow or use /reset-plan to start fresh.`,
-            },
-          ],
-          isError: true,
-        };
+        ctx.ui.notify(
+          `❌ Workflow already in progress (state: ${workflow.state}). Use /reset-plan to start fresh.`,
+          "error"
+        );
+        return;
       }
 
       workflow = {
         state: "RESEARCHING",
-        userRequest: params.request,
+        userRequest: request,
         planApproved: false,
         currentPhase: "RESEARCHING",
         startTime: Date.now(),
+        feedback: undefined,
       };
 
       updateStatus(ctx);
       persistState();
-
-      // Transition to PLANNING phase - invoke RESEARCHER subagent
-      return {
-        content: [
-          {
-            type: "text",
-            text: `🎯 Starting planning workflow for: "${params.request}"\n\n📋 Workflow: RESEARCHER → PLANNER → [USER APPROVAL] → ORGANIZER\n\n🔍 Phase 1: RESEARCHER - Verifying official documentation...\n\nInvoking RESEARCHER subagent to gather official documentation and evaluate the tech stack.`,
-          },
-        ],
-      };
+      await advanceWorkflow(ctx);
     },
   });
 
-  // Tool 2: approve_plan - User approval gate
+  pi.registerCommand("approve-plan", {
+    description: "Approve the plan (no args) or request changes (provide feedback)",
+    handler: async (args, ctx) => {
+      if (workflow.state !== "PENDING_APPROVAL") {
+        ctx.ui.notify(
+          `❌ Cannot approve: Workflow is in ${workflow.state} state. Must be in PENDING_APPROVAL.`,
+          "error"
+        );
+        return;
+      }
+
+      const feedback = args.trim();
+
+      if (feedback) {
+        // Rejection with feedback — return to PLANNING
+        workflow.state = "PLANNING";
+        workflow.currentPhase = "PLANNING";
+        workflow.feedback = feedback;
+        pi.setActiveTools(PLANNING_TOOLS);
+        updateStatus(ctx);
+        persistState();
+        ctx.ui.notify("🔄 Plan rejected. Feedback provided. Please revise the plan.", "info");
+      } else {
+        // Approval — proceed to ORGANIZING
+        workflow.state = "ORGANIZING";
+        workflow.planApproved = true;
+        workflow.currentPhase = "ORGANIZING";
+        workflow.feedback = undefined;
+        updateStatus(ctx);
+        persistState();
+        await advanceWorkflow(ctx);
+      }
+    },
+  });
+
+  pi.registerCommand("reset-plan", {
+    description: "Reset the planning workflow to IDLE state",
+    handler: async (_args, ctx) => {
+      workflow = {
+        state: "IDLE",
+        userRequest: "",
+        planApproved: false,
+        currentPhase: "IDLE",
+        startTime: Date.now(),
+        feedback: undefined,
+      };
+      pi.setActiveTools(FULL_TOOLS);
+      updateStatus(ctx);
+      persistState();
+      ctx.ui.notify("Planning workflow reset to IDLE state", "info");
+    },
+  });
+
+  pi.registerCommand("plan-status", {
+    description: "Show current planning workflow status",
+    handler: async (_args, ctx) => {
+      const status = `
+📊 Planning Workflow Status
+${"─".repeat(40)}
+State: ${workflow.state}
+Phase: ${workflow.currentPhase}
+Request: ${workflow.userRequest || "(none)"}
+Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
+Feedback: ${workflow.feedback || "(none)"}
+      `.trim();
+      ctx.ui.notify(status, "info");
+    },
+  });
+
+  // ============ TOOLS (main-session only) ============
+
+  // Tool: submit_plan — called by PLANNER to signal completion
   pi.registerTool({
-    name: "approve_plan",
-    label: "Approve Plan",
-    description: "Approve the generated PLAN.md and proceed to ORGANIZER phase. Must be called after PLAN.md is generated.",
+    name: "submit_plan",
+    label: "Submit Plan",
+    description: "Called by PLANNER to submit the completed PLAN.md for user approval.",
     parameters: Type.Object({
-      approved: Type.Boolean({ description: "Set to true to approve the plan" }),
-      feedback: Type.Optional(Type.String({ description: "Feedback or changes requested if not approving" })),
+      planPath: Type.String({ description: "Path to the generated PLAN.md file", default: ".tmp/PLAN.md" }),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "PENDING_APPROVAL") {
+      if (workflow.state !== "PLANNING") {
         return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot approve: Workflow is in ${workflow.state} state. Must be in PENDING_APPROVAL state.`,
-            },
-          ],
+          content: [{ type: "text", text: `❌ Cannot submit plan: Workflow is in ${workflow.state} state.` }],
           isError: true,
         };
       }
 
-      if (!params.approved) {
-        // User did not approve - return to PLANNING with feedback
-        workflow.state = "PLANNING";
-        workflow.currentPhase = "PLANNING";
-        updateStatus(ctx);
-        persistState();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `🔄 Plan not approved. Returning to PLANNING phase.\n\n📣 User Feedback: ${params.feedback || "No feedback provided - please revise the plan."}\n\nThe PLANNER will regenerate the plan incorporating your feedback.`,
-            },
-          ],
-        };
+      try {
+        if (existsSync(params.planPath)) {
+          workflow.planContent = readFileSync(params.planPath, "utf-8");
+        }
+      } catch {
+        // Ignore read errors
       }
 
-      // User approved - proceed to ORGANIZING
-      workflow.state = "ORGANIZING";
-      workflow.planApproved = true;
-      workflow.currentPhase = "ORGANIZING";
+      workflow.state = "PENDING_APPROVAL";
+      workflow.currentPhase = "PENDING_APPROVAL";
+      pi.setActiveTools(["read", "bash"]);
       updateStatus(ctx);
       persistState();
 
+      const planPreview = workflow.planContent
+        ? workflow.planContent.substring(0, 500) + (workflow.planContent.length > 500 ? "\n..." : "")
+        : "(Plan content not available)";
+
       return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Plan approved! Proceeding to ORGANIZER phase...\n\n📋 Creating GitHub issues from the approved plan.`,
-          },
-        ],
+        content: [{
+          type: "text",
+          text:
+            `🎯 PLAN.md Generated!\n\n` +
+            `📄 Location: ${params.planPath}\n\n` +
+            `📝 Preview:\n${"─".repeat(60)}\n${planPreview}\n${"─".repeat(60)}\n\n` +
+            `⏳ **HARD STOP: USER APPROVAL REQUIRED**\n\n` +
+            `To proceed:\n` +
+            `1. Review the PLAN.md file\n` +
+            `2. Use "/approve-plan" to approve\n` +
+            `3. Or use "/approve-plan <feedback>" to request changes\n\n` +
+            `⚠️ The ORGANIZER will NOT run until you explicitly approve the plan.`,
+        }],
       };
     },
   });
 
-  // Tool 3: ask_user - Ambiguity resolution
+  // Tool: ask_user — called by PLANNER for clarifications
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
@@ -248,12 +400,7 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!ctx.hasUI) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot ask user: No UI available in non-interactive mode.`,
-            },
-          ],
+          content: [{ type: "text", text: `❌ Cannot ask user: No UI available in non-interactive mode.` }],
           isError: true,
         };
       }
@@ -266,208 +413,57 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
 
       if (!response || !response.trim()) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `⏸️ No response provided. Please answer the question to proceed with planning.`,
-            },
-          ],
+          content: [{ type: "text", text: `⏸️ No response provided. Please answer the question to proceed with planning.` }],
         };
       }
 
       return {
-        content: [
-          {
-            type: "text",
-            text: `✅ User clarification received:\n${response}`,
-          },
-        ],
+        content: [{ type: "text", text: `✅ User clarification received:\n${response}` }],
       };
-    },
-  });
-
-  // Tool 4: complete_research - Transition from RESEARCHING to PLANNING
-  pi.registerTool({
-    name: "complete_research",
-    label: "Complete Research",
-    description: "Called by RESEARCHER to complete the research phase and transition to PLANNING.",
-    parameters: Type.Object({
-      prePlanPath: Type.String({ description: "Path to the generated pre-plan.md file", default: ".tmp/pre-plan.md" }),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "RESEARCHING") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot complete research: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Read the pre-plan content
-      try {
-        const fs = await import("node:fs");
-        if (fs.existsSync(params.prePlanPath)) {
-          workflow.prePlanContent = fs.readFileSync(params.prePlanPath, "utf-8");
-        }
-      } catch {
-        // Ignore read errors
-      }
-
-      workflow.state = "PLANNING";
-      workflow.currentPhase = "PLANNING";
-      updateStatus(ctx);
-      persistState();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Research complete!\n\n📝 Phase 2: PLANNER - Generating implementation plan...\n\nUsing pre-plan from: ${params.prePlanPath}\n\n⚠️ IMPORTANT: The PLANNER will:\n- Generate a detailed PLAN.md\n- NEVER write implementation code\n- Ask for clarification if requirements are ambiguous\n- Reference official documentation from the pre-plan`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool 5: submit_plan - Transition from PLANNING to PENDING_APPROVAL
-  pi.registerTool({
-    name: "submit_plan",
-    label: "Submit Plan",
-    description: "Called by PLANNER to submit the completed PLAN.md for user approval.",
-    parameters: Type.Object({
-      planPath: Type.String({ description: "Path to the generated PLAN.md file", default: ".tmp/PLAN.md" }),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "PLANNING") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot submit plan: Workflow is in ${workflow.state} state.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Read the plan content
-      try {
-        const fs = await import("node:fs");
-        if (fs.existsSync(params.planPath)) {
-          workflow.planContent = fs.readFileSync(params.planPath, "utf-8");
-        }
-      } catch {
-        // Ignore read errors
-      }
-
-      workflow.state = "PENDING_APPROVAL";
-      workflow.currentPhase = "PENDING_APPROVAL";
-      updateStatus(ctx);
-      persistState();
-
-      const planPreview = workflow.planContent
-        ? workflow.planContent.substring(0, 500) + (workflow.planContent.length > 500 ? "\n..." : "")
-        : "(Plan content not available)";
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `🎯 PLAN.md Generated!\n\n📄 Location: ${params.planPath}\n\n📝 Preview:\n${"─".repeat(60)}\n${planPreview}\n${"─".repeat(60)}\n\n⏳ **HARD STOP: USER APPROVAL REQUIRED**\n\nTo proceed:\n1. Review the PLAN.md file\n2. Use "/approve_plan approved=true" to approve\n3. Or use "/approve_plan approved=false feedback='...'" to request changes\n\n⚠️ The ORGANIZER will NOT run until you explicitly approve the plan.`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool 6: complete_workflow - Mark workflow as complete
-  pi.registerTool({
-    name: "complete_workflow",
-    label: "Complete Workflow",
-    description: "Called by ORGANIZER to mark the workflow as complete after creating GitHub issues.",
-    parameters: Type.Object({
-      issuesCreated: Type.Number({ description: "Number of GitHub issues created" }),
-      summary: Type.Optional(Type.String({ description: "Summary of created issues" })),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (workflow.state !== "ORGANIZING") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Cannot complete workflow: Not in ORGANIZING state (current: ${workflow.state}).`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const duration = Math.round((Date.now() - workflow.startTime) / 1000);
-
-      workflow.state = "COMPLETE";
-      workflow.currentPhase = "COMPLETE";
-      updateStatus(ctx);
-      persistState();
-
-      // Restore full tool access
-      pi.setActiveTools(FULL_TOOLS);
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `🎉 Planning Workflow Complete!\n\n✅ Issues Created: ${params.issuesCreated}\n⏱️ Duration: ${duration}s\n\n${params.summary || ""}\n\n📋 Next Steps:\n1. Review created GitHub issues\n2. Begin implementation following PLAN.md\n3. Use "/plan" to start a new planning workflow\n\n💡 You can now use all Pi tools for implementation.`,
-          },
-        ],
-      };
-    },
-  });
-
-  // Tool 7: reset_plan - Emergency reset
-  pi.registerCommand("reset-plan", {
-    description: "Reset the planning workflow to IDLE state",
-    handler: async (_args, ctx) => {
-      workflow = {
-        state: "IDLE",
-        userRequest: "",
-        planApproved: false,
-        currentPhase: "IDLE",
-        startTime: Date.now(),
-      };
-      pi.setActiveTools(FULL_TOOLS);
-      updateStatus(ctx);
-      persistState();
-      ctx.ui.notify("Planning workflow reset to IDLE state", "info");
-    },
-  });
-
-  // Tool 8: status - Show current workflow status
-  pi.registerCommand("plan-status", {
-    description: "Show current planning workflow status",
-    handler: async (_args, ctx) => {
-      const status = `
-📊 Planning Workflow Status
-${"─".repeat(40)}
-State: ${workflow.state}
-Phase: ${workflow.currentPhase}
-Request: ${workflow.userRequest || "(none)"}
-Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
-      `.trim();
-      ctx.ui.notify(status, "info");
     },
   });
 
   // ============ EVENT HANDLERS ============
 
-  // Filter bash commands based on workflow state and pre-granted permissions
+  // Enhanced tool_call blocking with path-based restrictions
   pi.on("tool_call", async (event) => {
+    // Block write/edit outside .tmp/ during PLANNING
+    if (workflow.state === "PLANNING") {
+      if (event.toolName === "write" || event.toolName === "edit") {
+        const filePath = (event.input.file_path || event.input.path || "") as string;
+        if (!filePath.startsWith(".tmp/")) {
+          return {
+            block: true,
+            reason:
+              `🚫 Write/edit blocked in PLANNING phase for path: "${filePath}"\n\n` +
+              `Only .tmp/ directory is writable during planning. Use .tmp/PLAN.md for the plan.`,
+          };
+        }
+      }
+    }
+
+    // Block write/edit entirely during RESEARCHING and ORGANIZING
+    if (workflow.state === "RESEARCHING" || workflow.state === "ORGANIZING") {
+      if (event.toolName === "write" || event.toolName === "edit") {
+        return {
+          block: true,
+          reason:
+            `🚫 Write/edit is forbidden during ${workflow.state} phase.\n\n` +
+            `Subagents handle all file writes in this phase.`,
+        };
+      }
+    }
+
+    // Block subagent during ORGANIZING (extension manages it)
+    if (workflow.state === "ORGANIZING" && event.toolName === "subagent") {
+      return {
+        block: true,
+        reason:
+          `🚫 Subagent invocation blocked during ORGANIZING phase.\n\n` +
+          `The extension manages subagents automatically.`,
+      };
+    }
+
     if (event.toolName !== "bash") return undefined;
 
     const command = event.input.command as string;
@@ -476,23 +472,26 @@ Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
     if (isBlockedCommand(command)) {
       return {
         block: true,
-        reason: `🚫 Command blocked by planning workflow: "${command}"\n\nThis command is not allowed during the planning phase.`,
+        reason: `🚫 Command blocked by planning workflow: "${command}"`,
       };
     }
 
     // Check pre-granted permissions
     if (isPreGrantedCommand(command)) {
-      return undefined; // Allow without confirmation
+      return undefined;
     }
 
-    // During RESEARCHING and PLANNING phases, restrict bash usage
+    // During RESEARCHING and PLANNING, restrict bash to read-only
     if (workflow.state === "RESEARCHING" || workflow.state === "PLANNING") {
-      // Only allow read-only commands and pre-granted commands
       const readOnlyPatterns = [
         /^(cat|head|tail|less|more)\b/,
         /^(grep|find|ls|pwd|tree)\b/,
         /^git\s+(status|log|diff|branch|remote)\b/,
         /^(npm|yarn|pnpm)\s+list\b/,
+        /^mkdir -p \.tmp/,
+        /^touch \.tmp\//,
+        /^cat \.tmp\//,
+        /^ls \.tmp\//,
       ];
 
       const isReadOnly = readOnlyPatterns.some((p) => p.test(command));
@@ -500,31 +499,46 @@ Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
       if (!isReadOnly) {
         return {
           block: true,
-          reason: `⏸️ Command blocked in ${workflow.state} phase: "${command}"\n\nDuring ${workflow.state.toLowerCase()}, only read-only and pre-granted commands are allowed.\n\nAllowed: cat, grep, find, ls, git status/log/diff, gh issue create/list\n\nUse "/reset-plan" to exit planning mode if needed.`,
+          reason:
+            `⏸️ Command blocked in ${workflow.state} phase: "${command}"\n\n` +
+            `During ${workflow.state.toLowerCase()}, only read-only and pre-granted commands are allowed.\n\n` +
+            `Use "/reset-plan" to exit planning mode if needed.`,
         };
       }
     }
 
-    return undefined; // Allow the command
+    return undefined;
   });
 
   // Inject phase-specific context before agent starts
   pi.on("before_agent_start", async () => {
-    if (workflow.state === "RESEARCHING") {
+    if (workflow.state === "PLANNING") {
+      let content = loadPrompt("planner-phase");
+      if (workflow.feedback) {
+        content +=
+          `\n\n📣 USER FEEDBACK ON PREVIOUS PLAN:\n` +
+          `${workflow.feedback}\n\n` +
+          `Please revise the plan incorporating this feedback.`;
+        workflow.feedback = undefined;
+        persistState();
+      }
       return {
         message: {
           customType: "planning-context",
-          content: loadPrompt("researcher-phase"),
+          content,
           display: false,
         },
       };
     }
 
-    if (workflow.state === "PLANNING") {
+    if (workflow.state === "RESEARCHING") {
       return {
         message: {
           customType: "planning-context",
-          content: loadPrompt("planner-phase"),
+          content:
+            `[PLANNING WORKFLOW: RESEARCHING PHASE]\n\n` +
+            `The RESEARCHER subagent is currently running. ` +
+            `Your tools are restricted to read-only during this phase.`,
           display: false,
         },
       };
@@ -534,7 +548,26 @@ Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
       return {
         message: {
           customType: "planning-context",
-          content: loadPrompt("organizer-phase"),
+          content:
+            `[PLANNING WORKFLOW: ORGANIZING PHASE]\n\n` +
+            `The ORGANIZER subagent is currently creating GitHub issues. ` +
+            `Your tools are restricted during this phase.`,
+          display: false,
+        },
+      };
+    }
+
+    if (workflow.state === "PENDING_APPROVAL") {
+      return {
+        message: {
+          customType: "planning-context",
+          content:
+            `[PLANNING WORKFLOW: PENDING APPROVAL]\n\n` +
+            `⏳ HARD STOP: The PLAN.md is ready for your review.\n\n` +
+            `Please review .tmp/PLAN.md, then:\n` +
+            `• Approve: /approve-plan\n` +
+            `• Request changes: /approve-plan <your feedback>\n\n` +
+            `Your tools are restricted until you approve or reset.`,
           display: false,
         },
       };
@@ -545,9 +578,8 @@ Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
 
   // Handle workflow state on session start/resume
   pi.on("session_start", async (_event, ctx) => {
-    // Check if flag was set
     if (pi.getFlag("plan") === true) {
-      ctx.ui.notify("Planning workflow mode active. Use /plan <request> to start.", "info");
+      ctx.ui.notify('Planning workflow mode active. Use /plan "<request>" to start.', "info");
     }
 
     // Restore state from session entries
@@ -563,13 +595,33 @@ Plan Approved: ${workflow.planApproved ? "✅" : "⏳"}
         userRequest: workflowEntry.data.userRequest ?? workflow.userRequest,
         planApproved: workflowEntry.data.planApproved ?? workflow.planApproved,
         currentPhase: workflowEntry.data.currentPhase ?? workflow.currentPhase,
+        feedback: workflowEntry.data.feedback ?? workflow.feedback,
       };
+    }
+
+    // Restore appropriate tool set based on current state
+    switch (workflow.state) {
+      case "RESEARCHING":
+        pi.setActiveTools(READONLY_TOOLS);
+        break;
+      case "PLANNING":
+        pi.setActiveTools(PLANNING_TOOLS);
+        break;
+      case "PENDING_APPROVAL":
+        pi.setActiveTools(["read", "bash"]);
+        break;
+      case "ORGANIZING":
+        pi.setActiveTools(ORGANIZING_TOOLS);
+        break;
+      case "COMPLETE":
+      case "IDLE":
+        pi.setActiveTools(FULL_TOOLS);
+        break;
     }
 
     updateStatus(ctx);
   });
 
-  // Initialize status on extension load
   pi.on("extension_load", async (_event, ctx) => {
     updateStatus(ctx);
   });
