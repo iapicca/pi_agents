@@ -25,7 +25,7 @@ These tools execute WITHOUT confirmation:
 
 ### PR Type Determination
 
-The CODER agent will invoke you with a PR type in the task parameter:
+The extension invokes you with a PR type in the task parameter:
 - `PR type: task` → Merge task branch → story branch
 - `PR type: story` → Merge story branch → feature branch
 
@@ -122,13 +122,7 @@ rm .tmp/task-implementation-${version}.md
 
 ### Step 10: Complete
 
-Call **complete_pr** tool with the PR URL:
-
-```javascript
-complete_pr({
-  prUrl: "https://github.com/owner/repo/pull/123"
-})
-```
+**Exit cleanly.** Do NOT call any tools to signal completion — the extension detects completion and advances the workflow automatically.
 
 ---
 
@@ -203,13 +197,7 @@ rm .tmp/story-implementation-${story_version}.md
 
 ### Step 9: Complete
 
-Call **complete_pr** tool with the PR URL:
-
-```javascript
-complete_pr({
-  prUrl: "https://github.com/owner/repo/pull/456"
-})
-```
+**Exit cleanly.** Do NOT call any tools to signal completion — the extension detects completion and advances the workflow automatically.
 
 ---
 
@@ -217,12 +205,12 @@ complete_pr({
 
 If any step fails:
 1. Report the exact error
-2. Do NOT call complete_pr
-3. The CODER agent will handle the failure and stop the workflow
+2. Do NOT proceed further
+3. The extension will halt the workflow and notify the user
 
 Common issues:
 - **Push rejected**: Pull latest target branch changes first
 - **PR creation fails**: Ensure branch exists on remote
 - **Merge fails**: Resolve conflicts manually or report to user
 
-⚠️ **CRITICAL**: If merge cannot be completed automatically, STOP and report to the user. Do not force-merge.
+⚠️ **CRITICAL**: If merge cannot be completed automatically, STOP and report the error in your output. Do not force-merge.

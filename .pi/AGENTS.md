@@ -50,11 +50,11 @@ Both workflows are enforced by extensions and cannot be bypassed.
 
 ## Workflow States
 
-1. **IDLE** → User calls `/plan <request>`
-2. **RESEARCHING** → RESEARCHER verifies documentation
-3. **PLANNING** → PLANNER generates PLAN.md
-4. **PENDING_APPROVAL** → **HARD STOP** - User must approve
-5. **ORGANIZING** → ORGANIZER creates GitHub issues
+1. **IDLE** → User calls `/plan "<request>"`
+2. **RESEARCHING** → Extension auto-spawns RESEARCHER subagent
+3. **PLANNING** → PLANNER (main session) reads pre-plan, asks user if needed, generates PLAN.md
+4. **PENDING_APPROVAL** → **HARD STOP** - User calls `/approve-plan` or `/approve-plan <feedback>`
+5. **ORGANIZING** → Extension auto-spawns ORGANIZER subagent
 6. **COMPLETE** → Workflow finished
 
 ## Semantic Versioning for Issues
@@ -156,15 +156,14 @@ A separate **coding workflow** implements approved GitHub issues through code us
 ### Coding Workflow States
 
 1. **IDLE** → User calls `/code <issue-url>`
-2. **FETCHING_ISSUE** → Parse issue type (feature/story/task)
-3. **PLANNING_FEATURE** → IMPLEMENTATION PLANNER creates feature architecture plan
-4. **PLANNING_STORIES** → IMPLEMENTATION PLANNER creates story strategy plans (upfront)
-5. **PLANNING_TASK** → IMPLEMENTATION PLANNER analyzes current codebase for task
-6. **CODING** → CODER loads all 3 impl files and writes/edits code
-7. **LINTING** → Run first-party linter, fix errors
-8. **CREATING_PR** → PR-WRITER creates task→story PR or story→feature PR, merges
-9. **COMPLETE_TASK** → Task done, clean implementation file, proceed to next task
-10. **COMPLETE_ALL** → All stories and tasks finished
+2. **FETCHING_ISSUE** → Extension fetches issue, determines type, creates branches
+3. **PLANNING_FEATURE** → Extension auto-spawns IMPLEMENTATION PLANNER (feature level)
+4. **PLANNING_STORIES** → Extension auto-spawns IMPLEMENTATION PLANNER for each story (sequential)
+5. **PLANNING_TASK** → Extension auto-spawns IMPLEMENTATION PLANNER (task level)
+6. **CODING** → CODER (main session) loads all 3 impl files, writes/edits code, runs linter
+7. **CREATING_PR** → Extension auto-spawns PR-WRITER to create and merge PR
+8. **COMPLETE_TASK** → Task done, extension advances to next task or story PR
+9. **COMPLETE_ALL** → All stories and tasks finished
 
 ### Issue Type Handling
 
@@ -214,13 +213,13 @@ Tasks are processed in ascending semantic version order:
 After reviewing `.tmp/PLAN.md`:
 
 ```
-/approve_plan approved=true
+/approve-plan
 ```
 
 ### Request Plan Changes
 
 ```
-/approve_plan approved=false feedback="Add more detail about token storage"
+/approve-plan Add more detail about token storage
 ```
 
 ### Check Status
@@ -274,82 +273,80 @@ After reviewing `.tmp/PLAN.md`:
 
 ## Pre-Granted Permissions
 
-### Planning Workflow
-The following execute WITHOUT confirmation:
-- `gh_issue_create`
-- `gh_issue_list`
-- `gh_issue_view`
-- `gh_api`
-- `gh_repo_view`
-- `gh_remote_url`
+### Structured GitHub Tools (gh-extension.ts)
+All `gh_*` tools execute WITHOUT confirmation:
+- `gh_issue_create`, `gh_issue_list`, `gh_issue_view`
+- `gh_pr_create`, `gh_pr_merge`, `gh_pr_view`
+- `gh_repo_view`, `gh_api`, `gh_remote_url`
 
-### Coding Workflow
-The following execute WITHOUT confirmation:
-- `gh_issue_view`
-- `gh_issue_list`
-- `gh_pr_create`
-- `gh_pr_merge`
-- `gh_pr_view`
-- `gh_api`
-- `gh_repo_view`
-- `git checkout -b`
-- `git checkout`
-- `git branch`
-- `git add`
-- `git commit`
-- `git push`
-- `git status`
-- `git log`
-- `git diff`
-- `git remote`
-- `git merge`
-- `git rebase`
+**Agents MUST use these structured tools instead of raw `gh` CLI commands.**
+
+### Planning Workflow Bash
+- `mkdir -p .tmp`, `touch .tmp/*`, `cat .tmp/*`, `ls .tmp/*`
+- All other bash commands require confirmation during planning phases
+
+### Coding Workflow Bash
+- `git checkout -b`, `git checkout`, `git branch`
+- `git add`, `git commit`, `git push`
+- `git status`, `git log`, `git diff`, `git remote`
+- `git merge`, `git rebase`
 - First-party linter commands (`npm run lint`, `cargo clippy`, `ruff check`, etc.)
+
+**Note:** Operating on `main`/`master` branch is mechanically blocked during coding.
 
 All other commands require explicit user approval.
 
 ## Tool Restrictions by Phase
 
+Enforcement is **three-layered**:
+1. **Mechanical**: `pi.setActiveTools()` removes forbidden tools from the LLM's system prompt
+2. **Runtime**: `tool_call` event handler blocks attempts that slip through
+3. **Contextual**: `before_agent_start` injects phase-specific constraint reminders
+
 ### RESEARCHING Phase
-- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`
-- Can ask user for documentation links via `ask_user`
+- **Active tools**: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`
+- The RESEARCHER subagent runs in isolation; main session has read-only tools
 
 ### PLANNING Phase
-- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `ask_user`, `subagent`
-- **FORBIDDEN**: `write`, `edit` (NEVER write code)
-- Must resolve ambiguities with `ask_user` tool
+- **Active tools**: `read`, `grep`, `find`, `ls`, `bash`, `write`, `edit`, `ask_user`, `subagent`, `submit_plan`, `webfetch`
+- **Path block**: `write`/`edit` outside `.tmp/` is runtime-blocked
+- `ask_user` is the ONLY way to interact with the user
+- Must resolve ambiguities before calling `submit_plan`
+
+### PENDING_APPROVAL Phase
+- **Active tools**: `read`, `bash` (read-only)
+- Hard stop. User must call `/approve-plan` or `/approve-plan <feedback>`
 
 ### ORGANIZING Phase
-- Allowed: `read`, `gh_issue_create`, `gh_issue_list`, `gh_issue_view`, `gh_repo_view`, `gh_api`
-- Pre-granted: All `gh_*` extension tools
+- **Active tools**: `read`, `bash`, `gh_issue_create`, `gh_issue_list`, `gh_issue_view`, `gh_repo_view`, `gh_api`, `gh_remote_url`
+- The ORGANIZER subagent runs in isolation; main session has restricted tools
+- `subagent` invocation is blocked
 
 ### PLANNING_FEATURE Phase (Coding Workflow)
-- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
-- **FORBIDDEN**: `write`, `edit` (NEVER write code)
-- Output: `feat-implementation-{N}.md`
+- **Active tools**: `read`, `grep`, `find`, `ls`, `bash`, `write`, `edit`, `webfetch`
+- **Path block**: `write`/`edit` outside `.tmp/` is runtime-blocked
+- Output: `.tmp/feat-implementation-{N}.md`
 
 ### PLANNING_STORIES Phase (Coding Workflow)
-- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
-- **FORBIDDEN**: `write`, `edit` (NEVER write code)
-- Output: `story-implementation-{N.M}.md` (one per story)
+- **Active tools**: same as PLANNING_FEATURE
+- **Path block**: same as PLANNING_FEATURE
+- Output: `.tmp/story-implementation-{N.M}.md` (one per story, sequential)
 
 ### PLANNING_TASK Phase (Coding Workflow)
-- Allowed: `read`, `grep`, `find`, `ls`, `bash` (read-only), `webfetch`, `ask_user`, `subagent`
-- **FORBIDDEN**: `write`, `edit` (NEVER write code)
-- Output: `task-implementation-{N.M.P}.md`
+- **Active tools**: same as PLANNING_FEATURE
+- **Path block**: same as PLANNING_FEATURE
+- Output: `.tmp/task-implementation-{N.M.P}.md`
 
 ### CODING Phase
-- Allowed: `read`, `grep`, `find`, `ls`, `bash`, `subagent`, `write`, `edit`
-- **FORBIDDEN**: Operating on `main`/`master` branch
+- **Active tools**: `read`, `grep`, `find`, `ls`, `bash`, `write`, `edit`, `subagent`
+- **Branch block**: `git checkout/merge/rebase main|master` is runtime-blocked
 - Must load all 3 implementation files before coding
-- Must run linter before invoking PR-WRITER
+- Must run linter before calling `complete_coding`
 - Must not introduce new dependencies (unless stated in issue)
 
-### PR-CREATION Phase
-- Allowed: `read`, `bash` (git commands only), `gh_pr_create`, `gh_pr_merge`, `gh_pr_view`
-- Pre-granted: `git add`, `git commit`, `git push`, `gh_pr_create`, `gh_pr_merge`
-- Task PRs must target story branch, never main/master or feature branch
-- Story PRs must target feature branch, never main/master
+### CREATING_PR Phase (Coding Workflow)
+- **Active tools**: `read`, `bash`, `gh_pr_create`, `gh_pr_merge`, `gh_pr_view`
+- The PR-WRITER subagent runs in isolation; main session has restricted tools
 
 ## Template Files
 
@@ -451,13 +448,16 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 
 ### Enforcement Mechanisms
 
-1. **State Machine**: 
+1. **State Machine**:
    - Planning: `IDLE` → `RESEARCHING` → `PLANNING` → `PENDING_APPROVAL` → `ORGANIZING` → `COMPLETE`
-   - Coding: `IDLE` → `FETCHING_ISSUE` → `PLANNING_FEATURE` → `PLANNING_STORIES` → `PLANNING_TASK` → `CODING` → `LINTING` → `CREATING_PR` → `COMPLETE_TASK` → `COMPLETE_ALL`
-2. **User Gates**: Hard stops requiring explicit user confirmation before phase transitions (planning only)
-3. **Pre-granted Permissions**: Allows specific bash commands (gh issue create, gh issue list, git, gh pr) without asking
-4. **Ambiguity Detection**: Prompts user when planner detects unclear requirements
-5. **Tool Filtering**: Extension blocks unauthorized tool usage (e.g., `write`/`edit` in PLANNING phases)
+   - Coding: `IDLE` → `FETCHING_ISSUE` → `PLANNING_FEATURE` → `PLANNING_STORIES` → `PLANNING_TASK` → `CODING` → `CREATING_PR` → `COMPLETE_TASK` → `COMPLETE_ALL`
+2. **Mechanical Tool Restriction**: `pi.setActiveTools()` removes forbidden tools from the LLM's system prompt at every state transition. The LLM literally cannot see blocked tools.
+3. **Path-Based Blocking**: `pi.on("tool_call")` runtime handler blocks `write`/`edit` outside `.tmp/` during planning phases.
+4. **Branch Protection**: `pi.on("tool_call")` runtime handler blocks `git checkout/merge/rebase main|master` during coding.
+5. **User Gates**: Hard stops requiring explicit user confirmation before phase transitions (`/approve-plan` for planning).
+6. **Auto-Spawning**: The extension invokes subagents directly via `pi.invokeTool("subagent", ...)`. The main-session LLM does not decide when to spawn subagents.
+7. **Ambiguity Detection**: PLANNER uses `ask_user` tool for unclear requirements.
+8. **Context Injection**: `before_agent_start` injects phase-specific constraint reminders into the LLM's context.
 
 ## Anti-Patterns to Avoid
 
@@ -471,17 +471,18 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 ## Success Metrics
 
 ### Planning Workflow
-- ✅ Planner NEVER writes code
+- ✅ Planner NEVER writes code (enforced by `setActiveTools` + path blocking)
 - ✅ Researcher uses only official docs
-- ✅ User approval gate stops workflow at PLAN.md
+- ✅ User approval gate stops workflow at PLAN.md (`/approve-plan` command)
 - ✅ Organizer only runs after explicit approval
 - ✅ Issues follow Semantic Versioning with version numbers in titles (e.g., `[1] Feat`, `[1.5] Story`, `[1.5.3] Task`)
-- ✅ No assumptions without user clarification
-- ✅ Workflow cannot be skipped
+- ✅ No assumptions without user clarification (`ask_user` tool)
+- ✅ Workflow cannot be skipped (extension-driven transitions)
+- ✅ `write`/`edit` outside `.tmp/` mechanically blocked during planning
 
 ### Coding Workflow
-- ✅ CODER NEVER operates on main/master
-- ✅ IMPLEMENTATION PLANNER NEVER writes code
+- ✅ CODER NEVER operates on main/master (enforced by `setActiveTools` + branch blocking)
+- ✅ IMPLEMENTATION PLANNER NEVER writes code (enforced by `setActiveTools` + path blocking)
 - ✅ Feature and story plans created upfront; task plans created iteratively
 - ✅ No duplication across feat/story/task implementation plans
 - ✅ CODER loads all 3 implementation files (feat + story + task) for context
@@ -490,10 +491,11 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 - ✅ Linter passes before every PR
 - ✅ No new dependencies introduced (unless stated in issue)
 - ✅ PRs include "Fixes" link to relevant issue
-- ✅ Tasks processed in semantic versioning order
+- ✅ Tasks processed in semantic versioning order (extension-managed iteration)
 - ✅ Granular cleanup: only completed implementation files are deleted
 - ✅ Parent plan checkboxes updated when child PRs merge
 - ✅ Feature branch reviewed by user before merging to main
+- ✅ Fully sequential — no parallelism
 
 ## References
 

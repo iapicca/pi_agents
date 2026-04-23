@@ -15,4 +15,4 @@ PR BODY REQUIREMENTS:
 
 TARGET BRANCH: Feature branch (NEVER main/master)
 
-When PR is merged, call complete_pr tool with prType="story" and the PR URL.
+When PR is merged, exit cleanly. Do NOT call any tools to signal completion.

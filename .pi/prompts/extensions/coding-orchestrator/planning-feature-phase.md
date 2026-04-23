@@ -18,4 +18,4 @@ CONSTRAINTS:
 OUTPUT:
 Create .tmp/feat-implementation-{N}.md following .pi/prompts/impl-templates/feature.md
 
-When complete, call submit_feature_plan tool.
+When complete, exit cleanly. Do NOT call any tools to signal completion.

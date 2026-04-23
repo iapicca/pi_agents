@@ -40,6 +40,6 @@ WORKFLOW:
 5. Use templates from .pi/prompts/issue-templates/
 6. Substitute all template variables (TITLE, DESCRIPTION, FILES, etc.)
 
-When complete, call the complete_workflow tool with the number of issues created.
+When complete, exit cleanly. Do NOT call any tools to signal completion.
 
 ✅ User has explicitly approved the plan - proceed with issue creation.

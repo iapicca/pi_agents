@@ -20,4 +20,4 @@ CONSTRAINTS:
 OUTPUT:
 Create .tmp/story-implementation-{N.M}.md following .pi/prompts/impl-templates/story.md
 
-When complete, call submit_story_plan tool.
+When complete, exit cleanly. Do NOT call any tools to signal completion.
