@@ -5,6 +5,5 @@
     "./.pi/extensions/coding-orchestrator.ts",
     "./.pi/extensions/gh-extension.ts"
   ],
-  "agentScope": "both",
   "enableSkillCommands": true
 }

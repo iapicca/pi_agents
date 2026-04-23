@@ -20,11 +20,12 @@ User Request → Invoke RESEARCHER (subagent) → Read pre-plan.md → Generate 
 ## Starting the Workflow
 
 1. Receive the user's planning request
-2. **ALWAYS invoke RESEARCHER first** via subagent tool:
+2. **ALWAYS invoke RESEARCHER first** via subagent tool with `agentScope: "both"`:
    ```
    subagent({
      agent: "researcher",
-     task: "Research and verify official documentation for: [user request]. Create .tmp/pre-plan.md with verified tech stack, API auth requirements, and risks."
+     task: "Research and verify official documentation for: [user request]. Create .tmp/pre-plan.md with verified tech stack, API auth requirements, and risks.",
+     agentScope: "both"
    })
    ```
 3. Wait for RESEARCHER to complete and call `complete_research`

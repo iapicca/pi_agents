@@ -382,7 +382,7 @@ All agent outputs follow structured templates:
 │   ├── planning-orchestrator.ts # Planning workflow enforcement
 │   ├── coding-orchestrator.ts   # Coding workflow enforcement
 │   └── gh-extension.ts          # Structured GitHub CLI tools
-├── agents/                       # Agent definitions
+├── agents/                       # Agent definitions (project-local copy)
 │   ├── researcher.md            # Research agent (planning)
 │   ├── planner.md               # Planning agent (primary)
 │   ├── organizer.md             # Organization agent
@@ -390,6 +390,13 @@ All agent outputs follow structured templates:
 │   ├── implementation-planner.md # Implementation planning agent (3 levels)
 │   └── pr-writer.md             # PR creation agent (task + story PRs)
 ├── prompts/
+│   ├── agents/                  # Agent system prompts
+│   │   ├── researcher.md
+│   │   ├── planner.md
+│   │   ├── organizer.md
+│   │   ├── coder.md
+│   │   ├── implementation-planner.md
+│   │   └── pr-writer.md
 │   ├── pre-plan.md              # Pre-plan template
 │   ├── plan.md                  # Plan template
 │   ├── impl-templates/          # Implementation plan templates
@@ -417,6 +424,26 @@ All agent outputs follow structured templates:
 │           └── creating-pr-story-phase.md
 └── settings.json                # Configuration
 ```
+
+## Agent Installation
+
+Agent definitions exist in **two locations** so the `subagent` extension can discover them:
+
+1. **Project-local**: `.pi/agents/*.md` — version-controlled with your repo
+2. **Global**: `~/.pi/agent/agents/*.md` — required because the `subagent` tool defaults to `agentScope: "user"` (global-only)
+
+All agent invocations in this workflow explicitly pass `agentScope: "both"` so agents are found regardless of which location they are installed in. However, the installer copies them to the global directory to ensure compatibility.
+
+### Agent Definitions
+
+| Agent | Role | Scope |
+|-------|------|-------|
+| `researcher` | Verifies official documentation | Planning workflow |
+| `planner` | Generates PLAN.md | Planning workflow (primary) |
+| `organizer` | Creates GitHub issues from plan | Planning workflow |
+| `coder` | Implements issues via code | Coding workflow (primary) |
+| `implementation-planner` | Analyzes codebase, writes impl plans | Coding workflow (3 levels) |
+| `pr-writer` | Commits, creates PRs, merges | Coding workflow |
 
 ## State Machine Enforcement
 

@@ -147,7 +147,8 @@ subagent({
         `Feature URL: https://github.com/${owner}/${repo}/issues/${feature.number}\n` +
         `Level: feature\n` +
         `Feature branch: ${featureBranch}\n` +
-        `Version: ${feature.version}`
+        `Version: ${feature.version}`,
+  agentScope: "both"
 })
 ```
 
@@ -166,7 +167,8 @@ subagent({
         `Level: story\n` +
         `Feature branch: ${featureBranch}\n` +
         `Story branch: ${story.branch}\n` +
-        `Version: ${story.version}`
+        `Version: ${story.version}`,
+  agentScope: "both"
 })
 ```
 
@@ -206,7 +208,8 @@ subagent({
         `Feature branch: ${featureBranch}\n` +
         `Story branch: ${storyBranch}\n` +
         `Task branch: ${taskBranch}\n` +
-        `Version: ${task.version}`
+        `Version: ${task.version}`,
+  agentScope: "both"
 })
 ```
 
@@ -265,7 +268,8 @@ subagent({
         `Feature branch: ${featureBranch}\n` +
         `Version: ${task.version}\n` +
         `Repository: ${owner}/${repo}\n` +
-        `PR type: task`
+        `PR type: task`,
+  agentScope: "both"
 })
 ```
 
@@ -303,7 +307,8 @@ subagent({
         `Target branch (feature): ${featureBranch}\n` +
         `Version: ${story.version}\n` +
         `Repository: ${owner}/${repo}\n` +
-        `PR type: story`
+        `PR type: story`,
+  agentScope: "both"
 })
 ```
 
