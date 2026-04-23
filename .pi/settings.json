@@ -1,0 +1,9 @@
+{
+  "extensions": [
+    "./.pi/extensions/subagent/index.ts",
+    "./.pi/extensions/planning-orchestrator.ts",
+    "./.pi/extensions/coding-orchestrator.ts",
+    "./.pi/extensions/gh-extension.ts"
+  ],
+  "enableSkillCommands": true
+}
