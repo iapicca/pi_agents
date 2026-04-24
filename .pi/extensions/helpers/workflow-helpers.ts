@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
-import { type AgentConfig, discoverAgents } from "./subagent/agents.js";
+import { type AgentConfig, discoverAgents } from "../subagent/agents.js";
 
 export type { AgentConfig };
 export { discoverAgents };
