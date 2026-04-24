@@ -16,6 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSubagent } from "./helpers/workflow-helpers.js";
 
 type WorkflowState =
   | "IDLE"
@@ -142,10 +143,6 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
     });
   }
 
-  async function spawnSubagent(agent: string, task: string): Promise<any> {
-    return pi.invokeTool("subagent", { agent, task, agentScope: "both" } as any);
-  }
-
   // Auto-advance through states that are fully extension-driven.
   // Returns when reaching a state that requires main-session participation.
   async function advanceWorkflow(ctx: ExtensionContext): Promise<void> {
@@ -157,6 +154,7 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
           ctx.ui.notify("🔍 Spawning RESEARCHER subagent...", "info");
 
           const result = await spawnSubagent(
+            ctx.cwd,
             "researcher",
             `Research and verify official documentation for: "${workflow.userRequest}". ` +
             `Create .tmp/pre-plan.md with verified tech stack, API auth requirements, and risks. ` +
@@ -194,6 +192,7 @@ export default function planningOrchestrator(pi: ExtensionAPI): void {
           ctx.ui.notify("📋 Spawning ORGANIZER subagent...", "info");
 
           const result = await spawnSubagent(
+            ctx.cwd,
             "organizer",
             `Create GitHub issues from the approved plan in .tmp/PLAN.md. ` +
             `Use semantic versioning in titles (e.g., [1] Feat, [1.1] Story, [1.1.1] Task).`
