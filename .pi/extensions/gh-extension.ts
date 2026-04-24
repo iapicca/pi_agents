@@ -7,35 +7,19 @@
  * Pre-granted: all tools in this extension execute without user confirmation.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { execSync } from "node:child_process";
-
-function gh(args: string[], input?: string): { stdout: string; stderr: string; code: number } {
-  try {
-    const stdout = execSync(`gh ${args.join(" ")}`, {
-      input,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return { stdout: stdout.trim(), stderr: "", code: 0 };
-  } catch (err: any) {
-    return {
-      stdout: err.stdout?.toString?.() ?? "",
-      stderr: err.stderr?.toString?.() ?? err.message ?? "Unknown error",
-      code: err.status ?? 1,
-    };
-  }
-}
-
-function parseJson<T>(text: string): T | null {
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
-}
+import {
+  ghIssueCreate,
+  ghIssueList,
+  ghIssueView,
+  ghPrCreate,
+  ghPrMerge,
+  ghPrView,
+  ghRepoView,
+  ghApi,
+  ghRemoteUrl,
+} from "./workflow-helpers.js";
 
 export default function ghExtension(pi: ExtensionAPI): void {
   // ── Issue Tools ──
@@ -53,31 +37,19 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["issue", "create", "--title", params.title, "--body", params.body];
-      if (params.label) args.push("--label", params.label);
-      if (params.parent) args.push("--parent", String(params.parent));
-      if (params.milestone) args.push("--milestone", params.milestone);
-
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh issue create failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghIssueCreate({
+        title: params.title,
+        body: params.body,
+        label: params.label,
+        parent: params.parent,
+        milestone: params.milestone,
+      });
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      // Output usually contains the issue URL; try to extract the number
-      const match = result.stdout.match(/\/issues\/(\d+)/);
-      const issueNumber = match ? parseInt(match[1], 10) : null;
-
       return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Issue created${issueNumber ? ` (#${issueNumber})` : ""}\n${result.stdout}`,
-          },
-        ],
-        data: { issueNumber, url: result.stdout.trim() },
+        content: result.content,
+        data: { issueNumber: result.issueNumber, url: result.url },
       };
     },
   });
@@ -95,23 +67,19 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["issue", "list", "--state", params.state ?? "open", "--limit", String(params.limit ?? 30)];
-      if (params.label) args.push("--label", params.label);
-      if (params.search) args.push("--search", params.search);
-      args.push("--json", params.json_fields ?? "number,title,labels,state");
-
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh issue list failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghIssueList({
+        label: params.label,
+        state: params.state,
+        limit: params.limit,
+        json_fields: params.json_fields,
+        search: params.search,
+      });
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const data = parseJson<unknown[]>(result.stdout) ?? [];
       return {
-        content: [{ type: "text", text: `Found ${data.length} issue(s).` }],
-        data,
+        content: [{ type: "text", text: `Found ${result.data.length} issue(s).` }],
+        data: result.data,
       };
     },
   });
@@ -126,19 +94,13 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["issue", "view", String(params.number), "--json", params.json_fields ?? "number,title,body,labels,state,parent"];
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh issue view failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghIssueView(params.number, params.json_fields);
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const data = parseJson<Record<string, unknown>>(result.stdout);
       return {
         content: [{ type: "text", text: `Issue #${params.number} loaded.` }],
-        data,
+        data: result.data,
       };
     },
   });
@@ -158,28 +120,19 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["pr", "create", "--title", params.title, "--body", params.body, "--base", params.base, "--head", params.head];
-      if (params.draft) args.push("--draft");
-
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh pr create failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghPrCreate({
+        title: params.title,
+        body: params.body,
+        base: params.base,
+        head: params.head,
+        draft: params.draft,
+      });
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const match = result.stdout.match(/\/pull\/(\d+)/);
-      const prNumber = match ? parseInt(match[1], 10) : null;
-
       return {
-        content: [
-          {
-            type: "text",
-            text: `✅ PR created${prNumber ? ` (#${prNumber})` : ""}\n${result.stdout}`,
-          },
-        ],
-        data: { prNumber, url: result.stdout.trim() },
+        content: result.content,
+        data: { prNumber: result.prNumber, url: result.url },
       };
     },
   });
@@ -195,20 +148,15 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["pr", "merge", String(params.number_or_branch), `--${params.method ?? "squash"}`];
-      if (params.delete_branch !== false) args.push("--delete-branch");
-
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh pr merge failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghPrMerge({
+        number_or_branch: params.number_or_branch,
+        method: params.method,
+        delete_branch: params.delete_branch,
+      });
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      return {
-        content: [{ type: "text", text: `✅ PR merged.\n${result.stdout}` }],
-      };
+      return { content: result.content };
     },
   });
 
@@ -222,19 +170,13 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["pr", "view", String(params.number_or_branch), "--json", params.json_fields ?? "number,title,state,url,headRefName,baseRefName"];
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh pr view failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghPrView(params.number_or_branch, params.json_fields);
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const data = parseJson<Record<string, unknown>>(result.stdout);
       return {
         content: [{ type: "text", text: `PR loaded.` }],
-        data,
+        data: result.data,
       };
     },
   });
@@ -250,19 +192,13 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["repo", "view", "--json", params.json_fields ?? "nameWithOwner,defaultBranchRef,url"];
-      const result = gh(args);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh repo view failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghRepoView(params.json_fields);
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const data = parseJson<Record<string, unknown>>(result.stdout);
       return {
         content: [{ type: "text", text: `Repository info loaded.` }],
-        data,
+        data: result.data,
       };
     },
   });
@@ -279,22 +215,17 @@ export default function ghExtension(pi: ExtensionAPI): void {
     }),
 
     async execute(_toolCallId, params) {
-      const args = ["api", params.endpoint, "--method", params.method ?? "GET"];
-      if (params.input) args.push("--input", "-");
-      if (params.preview) args.push("--preview", params.preview);
-
-      const result = gh(args, params.input);
-      if (result.code !== 0) {
-        return {
-          content: [{ type: "text", text: `❌ gh api failed:\n${result.stderr}` }],
-          isError: true,
-        };
+      const result = ghApi(params.endpoint, {
+        method: params.method,
+        input: params.input,
+        preview: params.preview,
+      });
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const data = parseJson<unknown>(result.stdout) ?? result.stdout;
       return {
         content: [{ type: "text", text: `API call succeeded.` }],
-        data,
+        data: result.data,
       };
     },
   });
@@ -306,26 +237,13 @@ export default function ghExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
 
     async execute() {
-      const result = gh(["repo", "view", "--json", "url"]);
-      if (result.code !== 0) {
-        // Fallback to git remote
-        const gitResult = gh(["remote", "get-url", "origin"]);
-        if (gitResult.code !== 0) {
-          return {
-            content: [{ type: "text", text: `❌ Could not get remote URL:\n${result.stderr}\n${gitResult.stderr}` }],
-            isError: true,
-          };
-        }
-        return {
-          content: [{ type: "text", text: gitResult.stdout }],
-          data: { url: gitResult.stdout.trim() },
-        };
+      const result = ghRemoteUrl();
+      if (result.isError) {
+        return { content: result.content, isError: true };
       }
-
-      const data = parseJson<Record<string, unknown>>(result.stdout);
       return {
-        content: [{ type: "text", text: String(data?.url ?? result.stdout) }],
-        data,
+        content: [{ type: "text", text: result.url ?? "" }],
+        data: { url: result.url },
       };
     },
   });

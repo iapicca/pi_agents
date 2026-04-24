@@ -455,7 +455,7 @@ This workflow is enforced by the `planning-orchestrator.ts` extension. Agents ca
 3. **Path-Based Blocking**: `pi.on("tool_call")` runtime handler blocks `write`/`edit` outside `.tmp/` during planning phases.
 4. **Branch Protection**: `pi.on("tool_call")` runtime handler blocks `git checkout/merge/rebase main|master` during coding.
 5. **User Gates**: Hard stops requiring explicit user confirmation before phase transitions (`/approve-plan` for planning).
-6. **Auto-Spawning**: The extension invokes subagents directly via `pi.invokeTool("subagent", ...)`. The main-session LLM does not decide when to spawn subagents.
+6. **Auto-Spawning**: The extension invokes subagents directly via `spawnSubagent()` in `workflow-helpers.ts`. The main-session LLM does not decide when to spawn subagents.
 7. **Ambiguity Detection**: PLANNER uses `ask_user` tool for unclear requirements.
 8. **Context Injection**: `before_agent_start` injects phase-specific constraint reminders into the LLM's context.
 

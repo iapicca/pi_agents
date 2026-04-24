@@ -19,6 +19,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runBash, ghIssueView, ghIssueList, spawnSubagent } from "./workflow-helpers.js";
 
 type CodingState =
   | "IDLE"
@@ -242,18 +243,6 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
     });
   }
 
-  async function spawnSubagent(agent: string, task: string): Promise<any> {
-    return pi.invokeTool("subagent", { agent, task, agentScope: "both" } as any);
-  }
-
-  async function runBash(command: string): Promise<{ stdout: string; isError: boolean }> {
-    const result = await pi.invokeTool("bash", { command } as any);
-    return {
-      stdout: result.content?.[0]?.text || "",
-      isError: result.isError || false,
-    };
-  }
-
   async function ensureBranch(branch: string, base: string): Promise<void> {
     const create = await runBash(`git checkout -b "${branch}" "${base}"`);
     if (create.isError) {
@@ -290,13 +279,10 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
           workflow.repoName = repo;
           workflow.issueNumber = parseInt(numberStr, 10);
 
-          const issueResult = await pi.invokeTool("gh_issue_view", {
-            number: workflow.issueNumber,
-            json_fields: "number,title,body,labels,state,parent",
-          } as any);
+          const issueResult = ghIssueView(workflow.issueNumber, "number,title,body,labels,state,parent");
 
           if (issueResult.isError) {
-            haltAndReset(ctx, "Failed to fetch issue: " + issueResult.content?.[0]?.text);
+            haltAndReset(ctx, "Failed to fetch issue: " + issueResult.content[0].text);
             return;
           }
 
@@ -310,22 +296,12 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
 
           // Build stories and tasks based on issue type
           if (workflow.issueType === "feature") {
-            const storiesResult = await pi.invokeTool("gh_issue_list", {
-              label: "story",
-              state: "open",
-              json_fields: "number,title,body,labels,state,parent",
-              limit: 100,
-            } as any);
+            const storiesResult = ghIssueList({ state: "open", limit: 100, json_fields: "number,title,body,labels,state,parent" });
 
             const allStories = (storiesResult.data || []) as any[];
             const featureStories = allStories.filter((s: any) => s.parent?.number === workflow.issueNumber);
 
-            const tasksResult = await pi.invokeTool("gh_issue_list", {
-              label: "task",
-              state: "open",
-              json_fields: "number,title,body,labels,state,parent",
-              limit: 100,
-            } as any);
+            const tasksResult = ghIssueList({ state: "open", limit: 100, json_fields: "number,title,body,labels,state,parent" });
 
             const allTasks = (tasksResult.data || []) as any[];
 
@@ -358,12 +334,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
             workflow.tasks.sort((a, b) => compareVersions(a.version, b.version));
 
           } else if (workflow.issueType === "story") {
-            const tasksResult = await pi.invokeTool("gh_issue_list", {
-              label: "task",
-              state: "open",
-              json_fields: "number,title,body,labels,state,parent",
-              limit: 100,
-            } as any);
+            const tasksResult = ghIssueList({ state: "open", limit: 100, json_fields: "number,title,body,labels,state,parent" });
 
             const allTasks = (tasksResult.data || []) as any[];
             const storyVersion = extractVersion(issueData.title);
@@ -432,6 +403,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
           ctx.ui.notify("📝 Planning feature architecture...", "info");
 
           const result = await spawnSubagent(
+            ctx.cwd,
             "implementation-planner",
             `Plan implementation for feature #${workflow.issueNumber}: "${workflow.featureBranch}".\n` +
             `Level: feature\n` +
@@ -458,6 +430,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
           for (const story of workflow.stories) {
             ctx.ui.notify(`📝 Planning story ${story.version}...`, "info");
             const result = await spawnSubagent(
+              ctx.cwd,
               "implementation-planner",
               `Plan implementation for story #${story.number}: "${story.title}".\n` +
               `Level: story\n` +
@@ -487,6 +460,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
           ctx.ui.notify(`📝 Planning task ${task.version}...`, "info");
 
           const result = await spawnSubagent(
+            ctx.cwd,
             "implementation-planner",
             `Plan implementation for task #${task.number}: "${task.title}".\n` +
             `Level: task\n` +
@@ -527,6 +501,7 @@ export default function codingOrchestrator(pi: ExtensionAPI): void {
           ctx.ui.notify(`🚀 Creating ${prType} PR...`, "info");
 
           const result = await spawnSubagent(
+            ctx.cwd,
             "pr-writer",
             `Create and merge ${prType} PR.\n` +
             `Repository: ${workflow.repoOwner}/${workflow.repoName}\n` +
