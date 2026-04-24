@@ -27,6 +27,57 @@ export interface AgentDiscoveryResult {
 	projectAgentsDir: string | null;
 }
 
+interface PiSettings {
+	defaultProvider?: string;
+	defaultModel?: string;
+	[key: string]: unknown;
+}
+
+function readSettings(cwd: string): PiSettings | undefined {
+	// Local settings takes precedence over global
+	const localPath = path.join(cwd, ".pi", "settings.json");
+	const globalPath = path.join(getAgentDir(), "settings.json");
+
+	for (const settingsPath of [localPath, globalPath]) {
+		try {
+			const content = fs.readFileSync(settingsPath, "utf-8");
+			const parsed = JSON.parse(content) as PiSettings;
+			if (parsed.defaultProvider && parsed.defaultModel) {
+				return parsed;
+			}
+		} catch {
+			// continue to next
+		}
+	}
+	return undefined;
+}
+
+function resolveModel(model: string | undefined, cwd: string): string | undefined {
+	const settings = readSettings(cwd);
+	const defaultProvider = settings?.defaultProvider;
+	const defaultModel = settings?.defaultModel;
+
+	if (!model) {
+		// No model specified — use defaultProvider/defaultModel from settings
+		if (defaultProvider && defaultModel) {
+			return `${defaultProvider}/${defaultModel}`;
+		}
+		return undefined;
+	}
+
+	if (model.includes("/")) {
+		// Already fully qualified (e.g., "opencode-go/kimi-k2.6")
+		return model;
+	}
+
+	// Bare model ID (e.g., "kimi-k2.6") — prefix with default provider from settings
+	if (defaultProvider) {
+		return `${defaultProvider}/${model}`;
+	}
+
+	return model;
+}
+
 function loadAgentsFromDir(dir: string, source: "user" | "project", cwd: string): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
@@ -79,7 +130,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", cwd: string)
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
-			model: frontmatter.model,
+			model: resolveModel(frontmatter.model, cwd),
 			systemPrompt,
 			source,
 			filePath,
