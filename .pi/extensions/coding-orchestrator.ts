@@ -19,7 +19,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runBash, ghIssueView, ghIssueList, spawnSubagent } from "./workflow-helpers.js";
+import { runBash, ghIssueView, ghIssueList, spawnSubagent } from "./helpers/workflow-helpers.js";
 
 type CodingState =
   | "IDLE"

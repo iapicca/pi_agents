@@ -19,7 +19,7 @@ import {
   ghRepoView,
   ghApi,
   ghRemoteUrl,
-} from "./workflow-helpers.js";
+} from "./helpers/workflow-helpers.js";
 
 export default function ghExtension(pi: ExtensionAPI): void {
   // ── Issue Tools ──

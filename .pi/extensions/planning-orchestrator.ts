@@ -16,7 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSubagent } from "./workflow-helpers.js";
+import { spawnSubagent } from "./helpers/workflow-helpers.js";
 
 type WorkflowState =
   | "IDLE"
